@@ -59,7 +59,8 @@ describe('RecordStore', () => {
 
     await store.add(targetRecord, 30);
     await store.add(otherRecord, 30);
-    await store.updateTerminalName('/tmp/session.jsonl', 'Kind dune');
+    expect(await store.updateTerminalName('/tmp/session.jsonl', 'Kind dune')).toBe(true);
+    expect(await store.updateTerminalName('/tmp/session.jsonl', 'Kind dune')).toBe(false);
 
     expect((await store.latest())?.sessionPath).toBe('/tmp/other.jsonl');
     expect((await store.read()).records.find((record) => record.sessionPath === '/tmp/session.jsonl')?.terminalName).toBe('Kind dune');

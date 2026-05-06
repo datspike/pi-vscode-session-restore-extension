@@ -46,14 +46,25 @@ export class RecordStore {
     await this.save(data.records.map((candidate) => candidate.id === record.id ? record : candidate));
   }
 
-  public async updateTerminalName(sessionPath: string, terminalName: string): Promise<void> {
+  public async updateTerminalName(sessionPath: string, terminalName: string): Promise<boolean> {
     const normalizedName = terminalName.trim();
     if (normalizedName.length === 0) {
-      return;
+      return false;
     }
     const data = await this.read();
-    const records = data.records.map((record) => record.sessionPath === sessionPath ? { ...record, terminalName: normalizedName } : record);
+    let changed = false;
+    const records = data.records.map((record) => {
+      if (record.sessionPath !== sessionPath || record.terminalName === normalizedName) {
+        return record;
+      }
+      changed = true;
+      return { ...record, terminalName: normalizedName };
+    });
+    if (!changed) {
+      return false;
+    }
     await this.save(records);
+    return true;
   }
 
   public async markTerminalClosed(sessionPath: string, terminalName: string | undefined, closedAt: number): Promise<void> {

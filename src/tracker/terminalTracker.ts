@@ -42,7 +42,7 @@ export class TerminalTracker implements vscode.Disposable {
       }
     }));
     this.disposables.push(vscode.window.tabGroups.onDidChangeTabs(() => {
-      void this.refreshActiveTerminalTitle();
+      void this.refreshTerminalTitles();
     }));
     this.disposables.push(vscode.window.onDidCloseTerminal((terminal) => {
       void this.onTerminalClose(terminal);
@@ -301,17 +301,17 @@ export class TerminalTracker implements vscode.Disposable {
     this.logger.debug(`Marked Pi session terminal as closed: ${sessionPath}`);
   }
 
-  private async refreshTerminalName(terminal: vscode.Terminal): Promise<void> {
+  private async refreshTerminalName(terminal: vscode.Terminal): Promise<boolean> {
     const shellPid = await terminal.processId;
     if (shellPid === undefined) {
-      return;
+      return false;
     }
     const sessionPath = this.shellSessions.get(shellPid) ?? this.terminalSessions.get(terminal);
     if (sessionPath === undefined) {
-      return;
+      return false;
     }
     this.terminalSessions.set(terminal, sessionPath);
-    await this.store.updateTerminalName(sessionPath, getTerminalTitleSnapshot(terminal));
+    return this.store.updateTerminalName(sessionPath, getTerminalTitleSnapshot(terminal));
   }
 
   private async findSessionPathForTerminal(terminal: vscode.Terminal, knownShellPid?: number): Promise<string | undefined> {
@@ -323,10 +323,15 @@ export class TerminalTracker implements vscode.Disposable {
     return shellPid === undefined ? undefined : this.shellSessions.get(shellPid);
   }
 
-  private async refreshActiveTerminalTitle(): Promise<void> {
-    const terminal = vscode.window.activeTerminal;
-    if (terminal !== undefined) {
-      await this.refreshTerminalName(terminal);
+  private async refreshTerminalTitles(): Promise<void> {
+    let refreshed = 0;
+    for (const terminal of vscode.window.terminals) {
+      if (await this.refreshTerminalName(terminal)) {
+        refreshed += 1;
+      }
+    }
+    if (refreshed > 0) {
+      this.logger.debug(`Refreshed Pi terminal titles from tab labels: ${refreshed}`);
     }
   }
 
