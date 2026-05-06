@@ -9,10 +9,19 @@ export interface MatchContext {
 
 export class SessionMatcher {
   public match(context: MatchContext): MatchResult | undefined {
-    const matches = context.candidates.map((candidate) => scoreCandidate(candidate, context.invocation, context.wrapperEvents ?? []));
+    const matches = context.candidates
+      .filter((candidate) => candidateMatchesInvocationCwd(candidate, context.invocation))
+      .map((candidate) => scoreCandidate(candidate, context.invocation, context.wrapperEvents ?? []));
     matches.sort((left, right) => right.score - left.score);
     return matches[0];
   }
+}
+
+function candidateMatchesInvocationCwd(candidate: SessionCandidate, invocation: PiInvocation): boolean {
+  if (candidate.cwd === undefined || invocation.cwd === undefined) {
+    return true;
+  }
+  return path.resolve(candidate.cwd) === path.resolve(invocation.cwd);
 }
 
 function scoreCandidate(candidate: SessionCandidate, invocation: PiInvocation, wrapperEvents: WrapperEvent[]): MatchResult {
@@ -25,7 +34,10 @@ function scoreCandidate(candidate: SessionCandidate, invocation: PiInvocation, w
     reasons.push('session mtime is near invocation window');
   }
 
-  if (invocation.cwd && candidate.path.startsWith(path.resolve(invocation.cwd))) {
+  if (candidate.cwd !== undefined && invocation.cwd !== undefined && path.resolve(candidate.cwd) === path.resolve(invocation.cwd)) {
+    score += 25;
+    reasons.push('session header cwd matches invocation cwd');
+  } else if (invocation.cwd && candidate.path.startsWith(path.resolve(invocation.cwd))) {
     score += 10;
     reasons.push('session path is under invocation cwd');
   }

@@ -59,6 +59,8 @@ export interface SessionCandidate {
   path: string;
   mtimeMs: number;
   size: number;
+  cwd?: string;
+  sessionId?: string;
 }
 
 export interface MatchResult {

@@ -5,9 +5,10 @@ import { readConfig } from './config.js';
 import { configurePathWrapper } from './env/pathWrapper.js';
 import { Logger } from './log.js';
 import { ensurePiSessionReporterInstalled } from './pi/piExtensionInstaller.js';
-import { getRestoreTerminalName, RestoreManager } from './restore/restoreManager.js';
+import { getRestoreTerminalName, RestoreManager, type AutoRestoreTarget, type TerminalRenamer } from './restore/restoreManager.js';
 import { RecordStore } from './store/recordStore.js';
 import { TerminalTracker } from './tracker/terminalTracker.js';
+import { getTerminalTitleSnapshot } from './tracker/terminalTitle.js';
 import { WrapperEventTail } from './tracker/wrapperEventTail.js';
 import type { ExtensionConfig, RestoreRecord } from './types.js';
 
@@ -72,7 +73,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('piSessionRestore.restoreLast', async () => {
-    const manager = new RestoreManager(store, getConfig());
+    const manager = createRestoreManager(store, getConfig(), logger);
     const scopeCwd = getWorkspaceScopeCwd();
     const latestRecord = await store.latest(scopeCwd);
     const terminal = vscode.window.activeTerminal ?? createRestoreTerminal(latestRecord);
@@ -131,7 +132,7 @@ async function runConservativeAutoRestore(
     return;
   }
 
-  const manager = new RestoreManager(store, config);
+  const manager = createRestoreManager(store, config, logger);
   logger.debug(`Auto-restore scan: scope=${scopeCwd}, terminals=${await describeTerminals(vscode.window.terminals)}`);
   const idleTerminals = await waitForIdleTerminals(logger);
   if (idleTerminals.length === 0) {
@@ -139,10 +140,25 @@ async function runConservativeAutoRestore(
     return;
   }
 
+  const restoreTargets = idleTerminals.map((terminal): AutoRestoreTarget => ({ terminal, title: getTerminalTitleSnapshot(terminal) }));
   const eligibleRecords = await manager.getAutoRestoreRecords(scopeCwd, idleTerminals.length);
-  logger.debug(`Auto-restore candidates: idle=${idleTerminals.length}, records=${eligibleRecords.map(describeRecordForLog).join(' | ')}`);
-  const result = await manager.autoRestoreMany(idleTerminals, scopeCwd);
+  logger.debug(`Auto-restore candidates: idle=${idleTerminals.length}, targets=${restoreTargets.map((target) => target.title ?? 'unnamed').join(', ')}, records=${eligibleRecords.map(describeRecordForLog).join(' | ')}`);
+  const result = await manager.autoRestoreTargets(restoreTargets, scopeCwd);
   logger.info(`Auto-restore result: restored=${result.restored}, skipped=${result.skipped.join('; ')}`);
+}
+
+function createRestoreManager(store: RecordStore, config: ExtensionConfig, logger: Logger): RestoreManager {
+  return new RestoreManager(store, config, createTerminalRenamer(logger));
+}
+
+function createTerminalRenamer(logger: Logger): TerminalRenamer {
+  return async (_terminal, name) => {
+    await vscode.commands.executeCommand('workbench.action.terminal.renameWithArg', { name }).then(() => {
+      logger.debug(`Terminal rename command applied: ${name}`);
+    }, (error: unknown) => {
+      logger.debug(`Terminal rename command failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
 }
 
 async function describeTerminals(terminals: readonly vscode.Terminal[]): Promise<string> {

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { SessionLocator, looksLikePiSessionJsonl } from '../src/session/sessionLocator.js';
+import { SessionLocator, looksLikePiSessionJsonl, readPiSessionMetadata } from '../src/session/sessionLocator.js';
 
 let tempDir: string;
 
@@ -21,7 +21,7 @@ describe('SessionLocator', () => {
     await mkdir(sessions, { recursive: true });
     const validPath = path.join(sessions, 'session.jsonl');
     const invalidPath = path.join(sessions, 'broken.jsonl');
-    await writeFile(validPath, '{"type":"message","text":"hello"}\n', 'utf8');
+    await writeFile(validPath, '{"type":"session","id":"abc","cwd":"/work/project"}\n{"type":"message","text":"hello"}\n', 'utf8');
     await writeFile(invalidPath, 'not-json\n', 'utf8');
     const mtime = new Date(10_000);
     await utimes(validPath, mtime, mtime);
@@ -34,7 +34,15 @@ describe('SessionLocator', () => {
       beforeMs: 11_000
     });
 
-    expect(candidates).toEqual([{ path: validPath, mtimeMs: 10_000, size: 34 }]);
+    expect(candidates).toEqual([{ path: validPath, mtimeMs: 10_000, size: 86, cwd: '/work/project', sessionId: 'abc' }]);
+  });
+
+  test('test_read_pi_session_metadata_expected_extracts_header_cwd', async () => {
+    'Metadata reader достаёт cwd и id из первой JSONL-записи.';
+    const filePath = path.join(tempDir, 'session.jsonl');
+    await writeFile(filePath, '{"type":"session","id":"abc","cwd":"/work/project"}\n', 'utf8');
+
+    expect(await readPiSessionMetadata(filePath)).toEqual({ cwd: '/work/project', sessionId: 'abc' });
   });
 
   test('test_looks_like_pi_session_empty_file_expected_false', async () => {

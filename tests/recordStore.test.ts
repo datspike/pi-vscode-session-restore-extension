@@ -65,6 +65,15 @@ describe('RecordStore', () => {
     expect((await store.read()).records.find((record) => record.sessionPath === '/tmp/session.jsonl')?.terminalName).toBe('Kind dune');
   });
 
+  test('test_mark_terminal_closed_unknown_path_expected_noop', async () => {
+    'Закрытие неизвестной previous session не создаёт лишнюю запись.';
+    const store = new RecordStore(tempDir, () => 20_000);
+
+    await store.markTerminalClosed('/tmp/missing.jsonl', 'Pi test', 12_000);
+
+    expect((await store.read()).records).toEqual([]);
+  });
+
   test('test_mark_terminal_closed_expected_sets_closed_marker_and_title', async () => {
     'Закрытие terminal tab помечает запись как закрытую для будущего auto-restore.';
     const store = new RecordStore(tempDir, () => 20_000);

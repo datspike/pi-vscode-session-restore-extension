@@ -4,7 +4,10 @@ import { parseShellCommand, parseWrapperArgv } from '../pi/piCommandParser.js';
 import { createRecordId, type RecordStore } from '../store/recordStore.js';
 import { SessionLocator } from '../session/sessionLocator.js';
 import { SessionMatcher } from '../session/sessionMatcher.js';
+import { getTerminalTitleSnapshot } from './terminalTitle.js';
 import type { ExtensionConfig, PiInvocation, PiSessionEvent, RestoreRecord, TrackerEvent, WrapperEvent } from '../types.js';
+
+const TERMINAL_CLOSE_MARK_DELAY_MS = 1_500;
 
 export class TerminalTracker implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
@@ -13,6 +16,7 @@ export class TerminalTracker implements vscode.Disposable {
   private readonly shellSessions = new Map<number, string>();
   private readonly terminalSessions = new Map<vscode.Terminal, string>();
   private readonly recentlyClosedShells = new Map<number, { terminalName: string; closedAt: number }>();
+  private readonly pendingClosedShells = new Map<number, NodeJS.Timeout>();
   private readonly locator = new SessionLocator();
   private readonly matcher = new SessionMatcher();
 
@@ -31,6 +35,14 @@ export class TerminalTracker implements vscode.Disposable {
     }));
     this.disposables.push(vscode.window.onDidChangeTerminalState((terminal) => {
       void this.onTerminalStateChange(terminal);
+    }));
+    this.disposables.push(vscode.window.onDidChangeActiveTerminal((terminal) => {
+      if (terminal !== undefined) {
+        void this.onTerminalStateChange(terminal);
+      }
+    }));
+    this.disposables.push(vscode.window.tabGroups.onDidChangeTabs(() => {
+      void this.refreshActiveTerminalTitle();
     }));
     this.disposables.push(vscode.window.onDidCloseTerminal((terminal) => {
       void this.onTerminalClose(terminal);
@@ -53,6 +65,10 @@ export class TerminalTracker implements vscode.Disposable {
   }
 
   public dispose(): void {
+    for (const timer of this.pendingClosedShells.values()) {
+      clearTimeout(timer);
+    }
+    this.pendingClosedShells.clear();
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
@@ -84,7 +100,7 @@ export class TerminalTracker implements vscode.Disposable {
     if (!invocation) {
       return;
     }
-    invocation.terminalName = event.terminal.name;
+    invocation.terminalName = getTerminalTitleSnapshot(event.terminal);
     this.activeInvocations.set(event.execution, invocation);
   }
 
@@ -104,18 +120,21 @@ export class TerminalTracker implements vscode.Disposable {
 
   private async onTerminalClose(terminal: vscode.Terminal): Promise<void> {
     const shellPid = await terminal.processId;
-    const sessionPath = await this.findSessionPathForTerminal(terminal, shellPid);
     const closedAt = Date.now();
-    if (sessionPath === undefined) {
-      if (shellPid !== undefined) {
-        this.recentlyClosedShells.set(shellPid, { terminalName: terminal.name, closedAt });
-      }
-      this.logger.debug(`Terminal closed without tracked Pi session: name=${terminal.name}, shellPid=${shellPid ?? 'unknown'}`);
+    if (shellPid === undefined) {
+      this.logger.debug(`Terminal close ignored because shell pid is unknown: name=${getTerminalTitleSnapshot(terminal)}`);
       return;
     }
-    await this.store.markTerminalClosed(sessionPath, terminal.name, closedAt);
+    const terminalName = getTerminalTitleSnapshot(terminal);
+    const timer = setTimeout(() => {
+      this.pendingClosedShells.delete(shellPid);
+      void this.confirmTerminalClosed(shellPid, terminalName, closedAt).catch((error: unknown) => {
+        this.logger.debug(error instanceof Error ? error.message : String(error));
+      });
+    }, TERMINAL_CLOSE_MARK_DELAY_MS);
+    this.pendingClosedShells.set(shellPid, timer);
     this.terminalSessions.delete(terminal);
-    this.logger.debug(`Marked Pi session terminal as closed: ${sessionPath}`);
+    this.logger.debug(`Scheduled Pi terminal close marker: name=${terminalName}, shellPid=${shellPid}`);
   }
 
   private async storePiSessionRecord(event: PiSessionEvent): Promise<void> {
@@ -141,9 +160,13 @@ export class TerminalTracker implements vscode.Disposable {
     };
 
     await this.rememberShellSession(event.ppid, event.sessionPath);
-    const terminalName = await this.findTerminalNameByShellPid(event.ppid);
+    const terminalName = await this.findTerminalTitleByShellPid(event.ppid);
     if (terminalName !== undefined) {
       record.terminalName = terminalName;
+    }
+    if (event.previousSessionFile !== undefined && event.previousSessionFile !== event.sessionPath) {
+      await this.store.markTerminalClosed(event.previousSessionFile, terminalName, event.time);
+      this.logger.debug(`Marked previous Pi session as inactive after ${event.reason ?? 'session switch'}: ${event.previousSessionFile}`);
     }
     this.applyClosedMarker(record, this.getRecentlyClosedShell(event.ppid, event.time));
     await this.store.add(record, this.getConfig().recordTtlDays);
@@ -233,7 +256,7 @@ export class TerminalTracker implements vscode.Disposable {
   }
 
   private async applyTerminalName(invocation: PiInvocation, shellPid: number): Promise<void> {
-    const terminalName = await this.findTerminalNameByShellPid(shellPid);
+    const terminalName = await this.findTerminalTitleByShellPid(shellPid);
     if (terminalName !== undefined) {
       invocation.terminalName = terminalName;
     }
@@ -267,6 +290,17 @@ export class TerminalTracker implements vscode.Disposable {
     }
   }
 
+  private async confirmTerminalClosed(shellPid: number, terminalName: string, closedAt: number): Promise<void> {
+    this.recentlyClosedShells.set(shellPid, { terminalName, closedAt });
+    const sessionPath = this.shellSessions.get(shellPid);
+    if (sessionPath === undefined) {
+      this.logger.debug(`Delayed Pi terminal close marker is waiting for session path: shellPid=${shellPid}`);
+      return;
+    }
+    await this.store.markTerminalClosed(sessionPath, terminalName, closedAt);
+    this.logger.debug(`Marked Pi session terminal as closed: ${sessionPath}`);
+  }
+
   private async refreshTerminalName(terminal: vscode.Terminal): Promise<void> {
     const shellPid = await terminal.processId;
     if (shellPid === undefined) {
@@ -277,7 +311,7 @@ export class TerminalTracker implements vscode.Disposable {
       return;
     }
     this.terminalSessions.set(terminal, sessionPath);
-    await this.store.updateTerminalName(sessionPath, terminal.name);
+    await this.store.updateTerminalName(sessionPath, getTerminalTitleSnapshot(terminal));
   }
 
   private async findSessionPathForTerminal(terminal: vscode.Terminal, knownShellPid?: number): Promise<string | undefined> {
@@ -289,8 +323,16 @@ export class TerminalTracker implements vscode.Disposable {
     return shellPid === undefined ? undefined : this.shellSessions.get(shellPid);
   }
 
-  private async findTerminalNameByShellPid(shellPid: number): Promise<string | undefined> {
-    return (await this.findTerminalByShellPid(shellPid))?.name;
+  private async refreshActiveTerminalTitle(): Promise<void> {
+    const terminal = vscode.window.activeTerminal;
+    if (terminal !== undefined) {
+      await this.refreshTerminalName(terminal);
+    }
+  }
+
+  private async findTerminalTitleByShellPid(shellPid: number): Promise<string | undefined> {
+    const terminal = await this.findTerminalByShellPid(shellPid);
+    return terminal === undefined ? undefined : getTerminalTitleSnapshot(terminal);
   }
 
   private async findTerminalByShellPid(shellPid: number): Promise<vscode.Terminal | undefined> {

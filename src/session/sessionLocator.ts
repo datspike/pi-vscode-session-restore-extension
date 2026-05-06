@@ -11,6 +11,11 @@ export interface LocateOptions {
   beforeMs?: number;
 }
 
+export interface PiSessionMetadata {
+  cwd?: string;
+  sessionId?: string;
+}
+
 export class SessionLocator {
   public async locate(options: LocateOptions): Promise<SessionCandidate[]> {
     const files = new Set<string>();
@@ -32,10 +37,18 @@ export class SessionLocator {
       if (options.beforeMs !== undefined && fileStat.mtimeMs > options.beforeMs) {
         continue;
       }
-      if (!(await looksLikePiSessionJsonl(filePath))) {
+      const metadata = await readPiSessionMetadata(filePath);
+      if (metadata === undefined) {
         continue;
       }
-      candidates.push({ path: filePath, mtimeMs: fileStat.mtimeMs, size: fileStat.size });
+      const candidate: SessionCandidate = { path: filePath, mtimeMs: fileStat.mtimeMs, size: fileStat.size };
+      if (metadata.cwd !== undefined) {
+        candidate.cwd = metadata.cwd;
+      }
+      if (metadata.sessionId !== undefined) {
+        candidate.sessionId = metadata.sessionId;
+      }
+      candidates.push(candidate);
     }
 
     return candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
@@ -43,6 +56,10 @@ export class SessionLocator {
 }
 
 export async function looksLikePiSessionJsonl(filePath: string): Promise<boolean> {
+  return (await readPiSessionMetadata(filePath)) !== undefined;
+}
+
+export async function readPiSessionMetadata(filePath: string): Promise<PiSessionMetadata | undefined> {
   const stream = createReadStream(filePath, { encoding: 'utf8' });
   const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
   let checked = 0;
@@ -55,21 +72,26 @@ export async function looksLikePiSessionJsonl(filePath: string): Promise<boolean
       checked += 1;
       try {
         const parsed = JSON.parse(trimmed) as unknown;
-        if (isObject(parsed)) {
-          return true;
+        if (!isObject(parsed)) {
+          return undefined;
         }
+        const metadata: PiSessionMetadata = {};
+        if (typeof parsed.cwd === 'string') {
+          metadata.cwd = parsed.cwd;
+        }
+        if (typeof parsed.id === 'string') {
+          metadata.sessionId = parsed.id;
+        }
+        return metadata;
       } catch {
-        return false;
-      }
-      if (checked >= 3) {
-        break;
+        return undefined;
       }
     }
   } finally {
     lines.close();
     stream.destroy();
   }
-  return false;
+  return checked > 0 ? {} : undefined;
 }
 
 async function expandJsonlGlob(globPath: string): Promise<string[]> {

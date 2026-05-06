@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type * as vscode from 'vscode';
-import { getRestoreTerminalName, isAutoRestorableRecord, RestoreManager } from '../src/restore/restoreManager.js';
+import { getRestoreTerminalName, isAutoRestorableRecord, RestoreManager, selectAutoRestorePairs } from '../src/restore/restoreManager.js';
 import { createRecordId, RecordStore } from '../src/store/recordStore.js';
 import type { ExtensionConfig, RestoreRecord } from '../src/types.js';
 
@@ -105,6 +105,109 @@ describe('RestoreManager', () => {
     'Закрытая пользователем вкладка не подходит для auto-restore.';
     expect(isAutoRestorableRecord(makeRecord('/tmp/open.jsonl', 10_000, '/work/a'))).toBe(true);
     expect(isAutoRestorableRecord({ ...makeRecord('/tmp/closed.jsonl', 10_000, '/work/a'), terminalClosedAt: 12_000 })).toBe(false);
+  });
+
+  test('test_execute_restore_with_terminal_name_expected_invokes_renamer_before_command', async () => {
+    'Restore применяет сохранённое имя вкладки перед запуском pi.';
+    const sessionPath = path.join(tempDir, 'session.jsonl');
+    await writeFile(sessionPath, '{}\n', 'utf8');
+    const store = new RecordStore(tempDir, () => 20_000);
+    const record = { ...makeRecord(sessionPath, 10_000, '/work/a'), terminalName: 'Pi-test-1' };
+    const terminal = makeTerminal();
+    const renamed: string[] = [];
+
+    await new RestoreManager(store, makeConfig('auto-confident'), async (_terminal, name) => {
+      renamed.push(name);
+    }).executeRestore(terminal, record);
+
+    expect(renamed).toEqual(['Pi-test-1']);
+    expect(terminal.commands).toEqual([`pi --session '${sessionPath}'`]);
+  });
+
+  test('test_auto_restore_targets_expected_matches_records_by_terminal_title', async () => {
+    'Auto-restore сопоставляет восстановленные terminal tabs с records по названию вкладки.';
+    const sessionPathA = path.join(tempDir, 'a.jsonl');
+    const sessionPathB = path.join(tempDir, 'b.jsonl');
+    await writeFile(sessionPathA, '{}\n', 'utf8');
+    await writeFile(sessionPathB, '{}\n', 'utf8');
+    const store = new RecordStore(tempDir, () => 20_000);
+    await store.add({ ...makeRecord(sessionPathA, 10_000, '/work/a'), terminalName: 'Pi test 1' }, 30);
+    await store.add({ ...makeRecord(sessionPathB, 11_000, '/work/a'), terminalName: 'Pi test 2' }, 30);
+    const firstTerminal = makeTerminal();
+    const secondTerminal = makeTerminal();
+
+    const result = await new RestoreManager(store, makeConfig('auto-confident')).autoRestoreTargets([
+      { terminal: firstTerminal, title: 'Pi test 1' },
+      { terminal: secondTerminal, title: 'Pi test 2' }
+    ], '/work/a');
+
+    expect(result).toEqual({ restored: 2, skipped: [] });
+    expect(firstTerminal.commands).toEqual([`pi --session '${sessionPathA}'`]);
+    expect(secondTerminal.commands).toEqual([`pi --session '${sessionPathB}'`]);
+  });
+
+  test('test_select_auto_restore_pairs_expected_title_match_beats_newer_fallback', () => {
+    'Title match выбирает старую подходящую запись вместо более новой записи другой вкладки.';
+    const oldMatchingRecord = { ...makeRecord('/tmp/a.jsonl', 10_000, '/work/a'), terminalName: 'Pi test 1' };
+    const newOtherRecord = { ...makeRecord('/tmp/b.jsonl', 12_000, '/work/a'), terminalName: 'Pi test 2' };
+    const target = { terminal: makeTerminal(), title: 'Pi test 1' };
+
+    expect(selectAutoRestorePairs([oldMatchingRecord, newOtherRecord], [target])).toEqual([{ target, record: oldMatchingRecord }]);
+  });
+
+  test('test_select_auto_restore_pairs_expected_restored_terminal_title_overrides_closed_marker', () => {
+    'Если VS Code восстановил вкладку с тем же title, closed marker считается shutdown-шумом.';
+    const closedButVisibleRecord = { ...makeRecord('/tmp/a.jsonl', 10_000, '/work/a'), terminalName: 'Pi test 1', terminalClosedAt: 12_000 };
+    const target = { terminal: makeTerminal(), title: 'Pi test 1' };
+
+    expect(selectAutoRestorePairs([closedButVisibleRecord], [target])).toEqual([{ target, record: closedButVisibleRecord }]);
+  });
+
+  test('test_select_auto_restore_pairs_expected_latest_resume_wins_same_title', () => {
+    'При нескольких resume в одной вкладке выигрывает последняя сессия с тем же title.';
+    const firstResume = { ...makeRecord('/tmp/first.jsonl', 10_000, '/work/a'), terminalName: 'Pi test 2', terminalClosedAt: 12_000 };
+    const secondResume = { ...makeRecord('/tmp/second.jsonl', 13_000, '/work/a'), terminalName: 'Pi test 2' };
+    const target = { terminal: makeTerminal(), title: 'Pi test 2' };
+
+    expect(selectAutoRestorePairs([firstResume, secondResume], [target])).toEqual([{ target, record: secondResume }]);
+  });
+
+  test('test_select_auto_restore_pairs_duplicate_titles_expected_uses_fallback_order', () => {
+    'Одинаковые titles у вкладок не используются для неоднозначного title-match.';
+    const oldRecord = { ...makeRecord('/tmp/old.jsonl', 10_000, '/work/a'), terminalName: 'pi' };
+    const newRecord = { ...makeRecord('/tmp/new.jsonl', 12_000, '/work/a'), terminalName: 'pi' };
+    const firstTarget = { terminal: makeTerminal(), title: 'pi' };
+    const secondTarget = { terminal: makeTerminal(), title: 'pi' };
+
+    expect(selectAutoRestorePairs([oldRecord, newRecord], [firstTarget, secondTarget])).toEqual([
+      { target: firstTarget, record: oldRecord },
+      { target: secondTarget, record: newRecord }
+    ]);
+  });
+
+  test('test_select_auto_restore_pairs_duplicate_titles_expected_allows_closed_marker_when_title_visible', () => {
+    'Fallback допускает closed marker только когда такая вкладка реально восстановлена VS Code.';
+    const oldRecord = { ...makeRecord('/tmp/old.jsonl', 10_000, '/work/a'), terminalName: 'pi', terminalClosedAt: 12_500 };
+    const newRecord = { ...makeRecord('/tmp/new.jsonl', 12_000, '/work/a'), terminalName: 'pi', terminalClosedAt: 12_500 };
+    const firstTarget = { terminal: makeTerminal(), title: 'pi' };
+    const secondTarget = { terminal: makeTerminal(), title: 'pi' };
+
+    expect(selectAutoRestorePairs([oldRecord, newRecord], [firstTarget, secondTarget])).toEqual([
+      { target: firstTarget, record: oldRecord },
+      { target: secondTarget, record: newRecord }
+    ]);
+  });
+
+  test('test_select_auto_restore_pairs_closed_title_expected_not_used_for_unrelated_target', () => {
+    'Closed marker не попадает fallback-ом во вкладку с другим title.';
+    const openAlpha = { ...makeRecord('/tmp/alpha-open.jsonl', 14_000, '/work/a'), terminalName: 'Alpha' };
+    const closedAlpha = { ...makeRecord('/tmp/alpha-closed.jsonl', 12_000, '/work/a'), terminalName: 'Alpha', terminalClosedAt: 13_000 };
+    const betaTarget = { terminal: makeTerminal(), title: 'Beta' };
+    const alphaTarget = { terminal: makeTerminal(), title: 'Alpha' };
+
+    expect(selectAutoRestorePairs([closedAlpha, openAlpha], [alphaTarget, betaTarget])).toEqual([
+      { target: alphaTarget, record: openAlpha }
+    ]);
   });
 
   test('test_auto_restore_scope_expected_uses_matching_workspace_record', async () => {
