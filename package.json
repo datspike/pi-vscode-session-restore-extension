@@ -1,0 +1,98 @@
+{
+  "name": "pi-vscode-session-restore-extension",
+  "displayName": "Pi Session Restore",
+  "description": "Transparent best-effort restore records for Pi sessions in VS Code integrated terminals.",
+  "version": "0.0.1",
+  "publisher": "datspike",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "vscode": "^1.109.5"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:piSessionRestore.showRecords",
+    "onCommand:piSessionRestore.clearRecords",
+    "onCommand:piSessionRestore.restoreLast"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "piSessionRestore.showRecords",
+        "title": "Pi Session Restore: Show Records"
+      },
+      {
+        "command": "piSessionRestore.clearRecords",
+        "title": "Pi Session Restore: Clear Records"
+      },
+      {
+        "command": "piSessionRestore.restoreLast",
+        "title": "Pi Session Restore: Restore Last Session"
+      }
+    ],
+    "configuration": {
+      "title": "Pi Session Restore",
+      "properties": {
+        "piSessionRestore.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Prepend the Pi PATH wrapper to new integrated terminals."
+        },
+        "piSessionRestore.sessionGlobPaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "~/.pi/agent/sessions/**/*.jsonl"
+          ],
+          "description": "Session JSONL paths scanned for Pi session records. Supports ~ and **."
+        },
+        "piSessionRestore.restorePolicy": {
+          "type": "string",
+          "enum": ["off", "prompt", "auto-confident"],
+          "default": "auto-confident",
+          "description": "Restore behavior for tracked sessions."
+        },
+        "piSessionRestore.confidenceThreshold": {
+          "type": "string",
+          "enum": ["high", "medium", "low"],
+          "default": "high",
+          "description": "Minimum confidence required for automatic restore."
+        },
+        "piSessionRestore.diagnosticsLevel": {
+          "type": "string",
+          "enum": ["off", "error", "info", "debug"],
+          "default": "info",
+          "description": "Diagnostic output verbosity."
+        },
+        "piSessionRestore.recordTtlDays": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "description": "Number of days to keep restore records."
+        }
+      }
+    }
+  },
+  "files": [
+    "dist/**",
+    "resources/bin/pi",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "@types/vscode": "^1.109.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.3"
+  }
+}

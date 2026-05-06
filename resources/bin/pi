@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+set +e
+
+WRAPPER_PATH="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+WRAPPER_DIR="${PI_VSCODE_SESSION_RESTORE_WRAPPER_DIR:-$(dirname "$WRAPPER_PATH")}" 
+EVENT_LOG="${PI_VSCODE_SESSION_RESTORE_EVENT_LOG:-}"
+MARKER="${PI_VSCODE_SESSION_RESTORE_MARKER:-}"
+START_MS="$(node -e 'process.stdout.write(String(Date.now()))' 2>/dev/null || date +%s000)"
+
+json_array_args() {
+  node -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' "$@" 2>/dev/null
+}
+
+log_event() {
+  local event_name="$1"
+  local real_pi_path="$2"
+  local exit_code="$3"
+  local session_path="$4"
+  shift 4
+  if [ -z "$EVENT_LOG" ]; then
+    return 0
+  fi
+  local argv_json
+  argv_json="$(json_array_args "pi" "$@")" || argv_json='["pi"]'
+  local line
+  line="$(node -e '
+const eventName = process.argv[1];
+const time = Number(process.argv[2]);
+const cwd = process.cwd();
+const argv = JSON.parse(process.argv[3]);
+const pid = Number(process.argv[4]);
+const ppid = Number(process.argv[5]);
+const wrapperDir = process.argv[6] || undefined;
+const realPi = process.argv[7] || undefined;
+const exitCodeRaw = process.argv[8];
+const marker = process.argv[9] || undefined;
+const sessionPath = process.argv[10] || undefined;
+const event = { event: eventName, time, cwd, argv, pid, ppid, wrapperDir, realPi, marker };
+if (exitCodeRaw !== "") event.exitCode = Number(exitCodeRaw);
+if (sessionPath !== undefined) event.sessionPath = sessionPath;
+process.stdout.write(JSON.stringify(event));
+' "$event_name" "$START_MS" "$argv_json" "$$" "$PPID" "$WRAPPER_DIR" "$real_pi_path" "$exit_code" "$MARKER" "$session_path" 2>/dev/null)" || return 0
+  mkdir -p "$(dirname "$EVENT_LOG")" 2>/dev/null || return 0
+  printf '%s\n' "$line" >> "$EVENT_LOG" 2>/dev/null || return 0
+}
+
+find_real_pi() {
+  local old_ifs="$IFS"
+  IFS=':'
+  for entry in $PATH; do
+    IFS="$old_ifs"
+    [ -n "$entry" ] || entry='.'
+    local resolved_entry
+    resolved_entry="$(readlink -f "$entry" 2>/dev/null || printf '%s' "$entry")"
+    if [ "$resolved_entry" = "$WRAPPER_DIR" ]; then
+      IFS=':'
+      continue
+    fi
+    local candidate="$entry/pi"
+    if [ -x "$candidate" ]; then
+      local resolved_candidate
+      resolved_candidate="$(readlink -f "$candidate" 2>/dev/null || printf '%s' "$candidate")"
+      if [ "$resolved_candidate" != "$WRAPPER_PATH" ]; then
+        printf '%s' "$candidate"
+        return 0
+      fi
+    fi
+    IFS=':'
+  done
+  IFS="$old_ifs"
+  return 1
+}
+
+should_allocate_session() {
+  case "${1:-}" in
+    install|remove|uninstall|update|list|config)
+      return 1
+      ;;
+  esac
+
+  for arg in "$@"; do
+    case "$arg" in
+      --session|--session=*|--no-session|--resume|-r|--fork|--fork=*|--continue|-c|--help|-h|--version|-v|--print|-p|--mode|--mode=*|--export|--export=*|--session-dir|--session-dir=*)
+        return 1
+        ;;
+    esac
+  done
+  return 0
+}
+
+allocate_session_path() {
+  node -e '
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const cwd = process.cwd();
+const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+let sessionDir;
+if (process.env.PI_CODING_AGENT_SESSION_DIR) {
+  sessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
+} else {
+  const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
+  const root = process.env.PI_VSCODE_SESSION_RESTORE_SESSION_ROOT || path.join(agentDir, "sessions");
+  sessionDir = path.join(root, safePath);
+}
+fs.mkdirSync(sessionDir, { recursive: true });
+const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+process.stdout.write(path.join(sessionDir, `${timestamp}_${crypto.randomUUID()}.jsonl`));
+' 2>/dev/null
+}
+
+REAL_PI=""
+if [ -n "${PI_VSCODE_SESSION_RESTORE_REAL_PI:-}" ] && [ -x "$PI_VSCODE_SESSION_RESTORE_REAL_PI" ]; then
+  RESOLVED_REAL_PI="$(readlink -f "$PI_VSCODE_SESSION_RESTORE_REAL_PI" 2>/dev/null || printf '%s' "$PI_VSCODE_SESSION_RESTORE_REAL_PI")"
+  if [ "$RESOLVED_REAL_PI" != "$WRAPPER_PATH" ]; then
+    REAL_PI="$PI_VSCODE_SESSION_RESTORE_REAL_PI"
+  fi
+fi
+if [ -z "$REAL_PI" ]; then
+  REAL_PI="$(find_real_pi)"
+fi
+if [ -z "$REAL_PI" ]; then
+  log_event "pi-wrapper-exit" "" "127" "" "$@"
+  printf 'pi-vscode-session-restore: real pi not found in PATH\n' >&2
+  exit 127
+fi
+
+SESSION_PATH=""
+REAL_ARGS=("$@")
+if [ -n "$EVENT_LOG" ] && should_allocate_session "$@"; then
+  SESSION_PATH="$(allocate_session_path)"
+  if [ -n "$SESSION_PATH" ]; then
+    REAL_ARGS=(--session "$SESSION_PATH" "$@")
+  fi
+fi
+
+log_event "pi-wrapper-invocation" "$REAL_PI" "" "$SESSION_PATH" "$@"
+exec "$REAL_PI" "${REAL_ARGS[@]}"
