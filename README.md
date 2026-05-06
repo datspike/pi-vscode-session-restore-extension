@@ -6,7 +6,9 @@ VS Code extension for best-effort Pi session restore in regular integrated termi
 
 ## Demo
 
-<video src="./resources/demo/pi-session-restore-demo.mp4" controls width="760"></video>
+![Pi Session Restore demo](./resources/demo/pi-session-restore-demo.gif)
+
+[Open the MP4 demo](./resources/demo/pi-session-restore-demo.mp4) for the higher-quality version.
 
 ## How it works
 

@@ -4,7 +4,9 @@
 
 ## Демонстрация
 
-<video src="./resources/demo/pi-session-restore-demo.mp4" controls width="760"></video>
+![Демонстрация Pi Session Restore](./resources/demo/pi-session-restore-demo.gif)
+
+[Открыть демонстрацию в MP4](./resources/demo/pi-session-restore-demo.mp4) — версия в лучшем качестве.
 
 ## Как работает
 
