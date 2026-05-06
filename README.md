@@ -2,6 +2,10 @@
 
 VS Code extension для прозрачного best-effort восстановления Pi sessions в обычном integrated terminal.
 
+## Demo
+
+<video src="./resources/demo/pi-session-restore-demo.mp4" controls width="760"></video>
+
 ## Как работает
 
 - При activation extension добавляет `resources/bin` в начало `PATH` только для новых VS Code integrated terminals через `ExtensionContext.environmentVariableCollection`.
