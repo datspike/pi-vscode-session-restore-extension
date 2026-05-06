@@ -86,6 +86,7 @@ export interface RestoreRecord {
   restoreAttempts: number;
   lastRestoreAt?: number;
   terminalName?: string;
+  terminalClosedAt?: number;
 }
 
 export interface RecordStoreData {

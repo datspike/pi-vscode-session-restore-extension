@@ -13,6 +13,7 @@ VS Code extension для прозрачного best-effort восстановл
 - VS Code-side tracker сохраняет локальные restore records из wrapper/shell/Pi-side events; shell integration используется как дополнительный best-effort источник.
 - Restore command строится через локально подтверждённый синтаксис `pi --session <path|id>`.
 - Restore records хранят snapshot названия terminal tab (`terminalName`) и используют его при создании новых restore terminals. Уже существующие shell-backed terminals публичный VS Code API переименовать не позволяет.
+- Если пользователь закрывает terminal tab с Pi-сессией, record помечается `terminalClosedAt` и больше не участвует в startup auto-restore. Ручная команда restore records не удаляет.
 
 ## Commands
 
@@ -32,7 +33,7 @@ VS Code extension для прозрачного best-effort восстановл
 
 ## Privacy
 
-Extension хранит только локальные диагностические события wrapper/Pi-side reporter и restore records в `globalStorageUri` VS Code. Session contents не копируются.
+Extension хранит только локальные диагностические события wrapper/Pi-side reporter и restore records в `globalStorageUri` VS Code. Session contents не копируются. При `piSessionRestore.diagnosticsLevel=debug` Output channel `Pi Session Restore` дополнительно показывает workspace scope, найденные terminals, кандидаты auto-restore и причины пропуска.
 
 ## Known limitations
 

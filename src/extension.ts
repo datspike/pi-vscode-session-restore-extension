@@ -132,14 +132,30 @@ async function runConservativeAutoRestore(
   }
 
   const manager = new RestoreManager(store, config);
+  logger.debug(`Auto-restore scan: scope=${scopeCwd}, terminals=${await describeTerminals(vscode.window.terminals)}`);
   const idleTerminals = await waitForIdleTerminals(logger);
   if (idleTerminals.length === 0) {
     logger.info('Auto-restore skipped because no idle terminals are available.');
     return;
   }
 
+  const eligibleRecords = await manager.getAutoRestoreRecords(scopeCwd, idleTerminals.length);
+  logger.debug(`Auto-restore candidates: idle=${idleTerminals.length}, records=${eligibleRecords.map(describeRecordForLog).join(' | ')}`);
   const result = await manager.autoRestoreMany(idleTerminals, scopeCwd);
   logger.info(`Auto-restore result: restored=${result.restored}, skipped=${result.skipped.join('; ')}`);
+}
+
+async function describeTerminals(terminals: readonly vscode.Terminal[]): Promise<string> {
+  const descriptions: string[] = [];
+  for (const terminal of terminals) {
+    const processId = await terminal.processId;
+    descriptions.push(`${terminal.name}:${processId ?? 'unknown'}`);
+  }
+  return descriptions.join(', ');
+}
+
+function describeRecordForLog(record: RestoreRecord): string {
+  return `${record.terminalName ?? 'unnamed'}:${record.sessionPath}:closed=${record.terminalClosedAt ?? 'no'}:attempts=${record.restoreAttempts}`;
 }
 
 async function waitForIdleTerminals(logger: Logger): Promise<vscode.Terminal[]> {

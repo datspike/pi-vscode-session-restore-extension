@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type * as vscode from 'vscode';
-import { getRestoreTerminalName, RestoreManager } from '../src/restore/restoreManager.js';
+import { getRestoreTerminalName, isAutoRestorableRecord, RestoreManager } from '../src/restore/restoreManager.js';
 import { createRecordId, RecordStore } from '../src/store/recordStore.js';
 import type { ExtensionConfig, RestoreRecord } from '../src/types.js';
 
@@ -84,6 +84,27 @@ describe('RestoreManager', () => {
     const records = await new RestoreManager(store, makeConfig('auto-confident')).getAutoRestoreRecords('/work/a', 2);
 
     expect(records.map((record) => record.sessionPath)).toEqual([sessionPathA, sessionPathB]);
+  });
+
+  test('test_auto_restore_records_expected_skips_closed_terminal_record', async () => {
+    'Auto-restore не восстанавливает запись, если пользователь закрыл её terminal tab.';
+    const sessionPathA = path.join(tempDir, 'a.jsonl');
+    const sessionPathB = path.join(tempDir, 'b.jsonl');
+    await writeFile(sessionPathA, '{}\n', 'utf8');
+    await writeFile(sessionPathB, '{}\n', 'utf8');
+    const store = new RecordStore(tempDir, () => 20_000);
+    await store.add({ ...makeRecord(sessionPathA, 10_000, '/work/a'), terminalClosedAt: 12_000 }, 30);
+    await store.add(makeRecord(sessionPathB, 11_000, '/work/a'), 30);
+
+    const records = await new RestoreManager(store, makeConfig('auto-confident')).getAutoRestoreRecords('/work/a', 2);
+
+    expect(records.map((record) => record.sessionPath)).toEqual([sessionPathB]);
+  });
+
+  test('test_is_auto_restorable_record_expected_false_for_closed_terminal', () => {
+    'Закрытая пользователем вкладка не подходит для auto-restore.';
+    expect(isAutoRestorableRecord(makeRecord('/tmp/open.jsonl', 10_000, '/work/a'))).toBe(true);
+    expect(isAutoRestorableRecord({ ...makeRecord('/tmp/closed.jsonl', 10_000, '/work/a'), terminalClosedAt: 12_000 })).toBe(false);
   });
 
   test('test_auto_restore_scope_expected_uses_matching_workspace_record', async () => {

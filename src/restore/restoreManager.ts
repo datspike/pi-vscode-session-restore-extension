@@ -16,6 +16,10 @@ export function getRestoreTerminalName(record: RestoreRecord | undefined): strin
   return terminalName && terminalName.length > 0 ? terminalName : 'Pi Session Restore';
 }
 
+export function isAutoRestorableRecord(record: RestoreRecord): boolean {
+  return record.confidence === 'high' && record.terminalClosedAt === undefined;
+}
+
 export class RestoreManager {
   private readonly adapter = new PiCliAdapter();
 
@@ -47,7 +51,7 @@ export class RestoreManager {
     if (scopeCwd === undefined) {
       return 'auto-restore skipped because workspace scope is unknown';
     }
-    const record = await this.store.latest(scopeCwd);
+    const record = (await this.getAutoRestoreRecords(scopeCwd, 1))[0];
     const decision = await this.decide(record);
     if (!record || decision.action !== 'auto') {
       return decision.reason;
@@ -106,7 +110,7 @@ export class RestoreManager {
   public async getAutoRestoreRecords(scopeCwd: string, terminalCount: number): Promise<RestoreRecord[]> {
     const records = await this.store.listForScope(scopeCwd);
     return records
-      .filter((record) => record.confidence === 'high')
+      .filter((record) => isAutoRestorableRecord(record))
       .sort((left, right) => left.startedAt - right.startedAt)
       .slice(-terminalCount);
   }

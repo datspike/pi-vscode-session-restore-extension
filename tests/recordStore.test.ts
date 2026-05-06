@@ -65,6 +65,27 @@ describe('RecordStore', () => {
     expect((await store.read()).records.find((record) => record.sessionPath === '/tmp/session.jsonl')?.terminalName).toBe('Kind dune');
   });
 
+  test('test_mark_terminal_closed_expected_sets_closed_marker_and_title', async () => {
+    'Закрытие terminal tab помечает запись как закрытую для будущего auto-restore.';
+    const store = new RecordStore(tempDir, () => 20_000);
+    const targetRecord = makeRecord('/tmp/session.jsonl', 10_000);
+
+    await store.add(targetRecord, 30);
+    await store.markTerminalClosed('/tmp/session.jsonl', 'Industry task', 12_000);
+
+    expect(await store.latest()).toEqual({ ...targetRecord, terminalName: 'Industry task', terminalClosedAt: 12_000 });
+  });
+
+  test('test_add_closed_record_expected_persists_delayed_close_marker', async () => {
+    'Record, созданный после раннего close event, сразу сохраняет closed marker.';
+    const store = new RecordStore(tempDir, () => 20_000);
+    const targetRecord = { ...makeRecord('/tmp/session.jsonl', 10_000), terminalName: 'Industry task', terminalClosedAt: 12_000 };
+
+    await store.add(targetRecord, 30);
+
+    expect(await store.latest()).toEqual(targetRecord);
+  });
+
   test('test_latest_with_scope_expected_ignores_other_workspaces', async () => {
     'Scoped latest не берёт запись из другого проекта.';
     const store = new RecordStore(tempDir, () => 20_000);
@@ -97,16 +118,25 @@ describe('RecordStore', () => {
     expect(createRecordId('/tmp/session.jsonl', 123)).toBe('123:L3RtcC9zZXNzaW9uLmpzb25s');
   });
 
-  test('test_merge_restore_record_expected_keeps_restore_attempts', () => {
-    'Merge для duplicate sessionPath не сбрасывает recent restore cooldown.';
-    const existing = { ...makeRecord('/tmp/session.jsonl', 10_000), restoreAttempts: 1, lastRestoreAt: 12_000 };
+  test('test_merge_restore_record_expected_keeps_closed_marker_for_delayed_old_event', () => {
+    'Запоздавшее событие старого процесса не снимает closed marker.';
+    const existing = { ...makeRecord('/tmp/session.jsonl', 10_000), restoreAttempts: 1, lastRestoreAt: 12_000, terminalClosedAt: 12_500 };
     const incoming = makeRecord('/tmp/session.jsonl', 11_000);
 
     expect(mergeRestoreRecord(incoming, existing)).toMatchObject({
       matchedAt: 11_000,
       restoreAttempts: 1,
-      lastRestoreAt: 12_000
+      lastRestoreAt: 12_000,
+      terminalClosedAt: 12_500
     });
+  });
+
+  test('test_merge_restore_record_expected_clears_closed_marker_for_newer_session_start', () => {
+    'Новый active session_start после закрытия снимает closed marker.';
+    const existing = { ...makeRecord('/tmp/session.jsonl', 10_000), terminalClosedAt: 12_500 };
+    const incoming = makeRecord('/tmp/session.jsonl', 14_000);
+
+    expect(mergeRestoreRecord(incoming, existing).terminalClosedAt).toBeUndefined();
   });
 });
 

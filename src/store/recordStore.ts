@@ -56,6 +56,22 @@ export class RecordStore {
     await this.save(records);
   }
 
+  public async markTerminalClosed(sessionPath: string, terminalName: string | undefined, closedAt: number): Promise<void> {
+    const normalizedName = terminalName?.trim();
+    const data = await this.read();
+    const records = data.records.map((record) => {
+      if (record.sessionPath !== sessionPath) {
+        return record;
+      }
+      const updated: RestoreRecord = { ...record, terminalClosedAt: closedAt };
+      if (normalizedName && normalizedName.length > 0) {
+        updated.terminalName = normalizedName;
+      }
+      return updated;
+    });
+    await this.save(records);
+  }
+
   public async clear(): Promise<void> {
     await this.save([]);
   }
@@ -97,6 +113,11 @@ export function mergeRestoreRecord(incoming: RestoreRecord, existing: RestoreRec
   }
   if (incoming.lastRestoreAt === undefined && existing.lastRestoreAt !== undefined) {
     merged.lastRestoreAt = existing.lastRestoreAt;
+  }
+  if (existing.terminalClosedAt !== undefined && incoming.startedAt <= existing.terminalClosedAt) {
+    merged.terminalClosedAt = existing.terminalClosedAt;
+  } else {
+    delete merged.terminalClosedAt;
   }
   return merged;
 }
