@@ -35,13 +35,25 @@ export class RecordStore {
   public async add(record: RestoreRecord, ttlDays: number): Promise<void> {
     const data = await this.read();
     const pruned = pruneRecords(data.records, ttlDays, this.now());
+    const duplicate = pruned.find((candidate) => candidate.id === record.id || candidate.sessionPath === record.sessionPath);
+    const mergedRecord = duplicate ? mergeRestoreRecord(record, duplicate) : record;
     const withoutDuplicate = pruned.filter((candidate) => candidate.id !== record.id && candidate.sessionPath !== record.sessionPath);
-    await this.save([record, ...withoutDuplicate]);
+    await this.save([mergedRecord, ...withoutDuplicate]);
   }
 
   public async update(record: RestoreRecord): Promise<void> {
     const data = await this.read();
     await this.save(data.records.map((candidate) => candidate.id === record.id ? record : candidate));
+  }
+
+  public async updateTerminalName(sessionPath: string, terminalName: string): Promise<void> {
+    const normalizedName = terminalName.trim();
+    if (normalizedName.length === 0) {
+      return;
+    }
+    const data = await this.read();
+    const records = data.records.map((record) => record.sessionPath === sessionPath ? { ...record, terminalName: normalizedName } : record);
+    await this.save(records);
   }
 
   public async clear(): Promise<void> {
@@ -68,6 +80,25 @@ export function createRecordId(sessionPath: string, matchedAt: number): string {
 export function pruneRecords(records: RestoreRecord[], ttlDays: number, now: number): RestoreRecord[] {
   const ttlMs = ttlDays * 24 * 60 * 60 * 1_000;
   return records.filter((record) => now - record.matchedAt <= ttlMs);
+}
+
+export function mergeRestoreRecord(incoming: RestoreRecord, existing: RestoreRecord): RestoreRecord {
+  const merged: RestoreRecord = {
+    ...existing,
+    ...incoming,
+    restoreAttempts: Math.max(existing.restoreAttempts, incoming.restoreAttempts)
+  };
+  if (incoming.args.length === 0 && existing.args.length > 0) {
+    merged.command = existing.command;
+    merged.args = existing.args;
+  }
+  if ((incoming.terminalName === undefined || incoming.args.length === 0) && existing.terminalName !== undefined) {
+    merged.terminalName = existing.terminalName;
+  }
+  if (incoming.lastRestoreAt === undefined && existing.lastRestoreAt !== undefined) {
+    merged.lastRestoreAt = existing.lastRestoreAt;
+  }
+  return merged;
 }
 
 function emptyStore(): RecordStoreData {

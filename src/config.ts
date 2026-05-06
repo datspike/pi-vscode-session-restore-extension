@@ -9,6 +9,7 @@ export function readConfig(): ExtensionConfig {
     restorePolicy: config.get<ExtensionConfig['restorePolicy']>('restorePolicy', 'auto-confident'),
     confidenceThreshold: config.get<ExtensionConfig['confidenceThreshold']>('confidenceThreshold', 'high'),
     diagnosticsLevel: config.get<ExtensionConfig['diagnosticsLevel']>('diagnosticsLevel', 'info'),
-    recordTtlDays: config.get<number>('recordTtlDays', 30)
+    recordTtlDays: config.get<number>('recordTtlDays', 30),
+    installPiExtension: config.get<boolean>('installPiExtension', true)
   };
 }

@@ -80,7 +80,7 @@ should_allocate_session() {
 
   for arg in "$@"; do
     case "$arg" in
-      --session|--session=*|--no-session|--resume|-r|--fork|--fork=*|--continue|-c|--help|-h|--version|-v|--print|-p|--mode|--mode=*|--export|--export=*|--session-dir|--session-dir=*)
+      /resume|--session|--session=*|--no-session|--resume|-r|--fork|--fork=*|--continue|-c|--help|-h|--version|-v|--print|-p|--mode|--mode=*|--export|--export=*|--session-dir|--session-dir=*)
         return 1
         ;;
     esac

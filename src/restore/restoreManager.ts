@@ -11,6 +11,11 @@ export interface AutoRestoreManyResult {
   skipped: string[];
 }
 
+export function getRestoreTerminalName(record: RestoreRecord | undefined): string {
+  const terminalName = record?.terminalName?.trim();
+  return terminalName && terminalName.length > 0 ? terminalName : 'Pi Session Restore';
+}
+
 export class RestoreManager {
   private readonly adapter = new PiCliAdapter();
 
@@ -98,7 +103,7 @@ export class RestoreManager {
     await this.store.update(updated);
   }
 
-  private async getAutoRestoreRecords(scopeCwd: string, terminalCount: number): Promise<RestoreRecord[]> {
+  public async getAutoRestoreRecords(scopeCwd: string, terminalCount: number): Promise<RestoreRecord[]> {
     const records = await this.store.listForScope(scopeCwd);
     return records
       .filter((record) => record.confidence === 'high')

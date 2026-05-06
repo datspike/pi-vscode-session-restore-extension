@@ -2,7 +2,7 @@
   "name": "pi-vscode-session-restore-extension",
   "displayName": "Pi Session Restore",
   "description": "Transparent best-effort restore records for Pi sessions in VS Code integrated terminals.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "datspike",
   "private": true,
   "type": "module",
@@ -44,7 +44,9 @@
         },
         "piSessionRestore.sessionGlobPaths": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [
             "~/.pi/agent/sessions/**/*.jsonl"
           ],
@@ -52,19 +54,32 @@
         },
         "piSessionRestore.restorePolicy": {
           "type": "string",
-          "enum": ["off", "prompt", "auto-confident"],
+          "enum": [
+            "off",
+            "prompt",
+            "auto-confident"
+          ],
           "default": "auto-confident",
           "description": "Restore behavior for tracked sessions."
         },
         "piSessionRestore.confidenceThreshold": {
           "type": "string",
-          "enum": ["high", "medium", "low"],
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
           "default": "high",
           "description": "Minimum confidence required for automatic restore."
         },
         "piSessionRestore.diagnosticsLevel": {
           "type": "string",
-          "enum": ["off", "error", "info", "debug"],
+          "enum": [
+            "off",
+            "error",
+            "info",
+            "debug"
+          ],
           "default": "info",
           "description": "Diagnostic output verbosity."
         },
@@ -73,13 +88,18 @@
           "default": 30,
           "minimum": 1,
           "description": "Number of days to keep restore records."
+        },
+        "piSessionRestore.installPiExtension": {
+          "type": "boolean",
+          "default": true,
+          "description": "Install a Pi-side extension that reports authoritative session switches such as /resume."
         }
       }
     }
   },
   "files": [
     "dist/**",
-    "resources/bin/pi",
+    "resources/**",
     "README.md",
     "package.json"
   ],

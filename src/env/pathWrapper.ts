@@ -5,6 +5,7 @@ export interface PathWrapperOptions {
   extensionUri: vscode.Uri;
   eventLogPath: string;
   enabled: boolean;
+  piExtensionEnabled: boolean;
 }
 
 export function configurePathWrapper(context: vscode.ExtensionContext, options: PathWrapperOptions): void {
@@ -18,4 +19,5 @@ export function configurePathWrapper(context: vscode.ExtensionContext, options: 
   collection.replace('PI_VSCODE_SESSION_RESTORE_EVENT_LOG', options.eventLogPath);
   collection.replace('PI_VSCODE_SESSION_RESTORE_WRAPPER_DIR', wrapperDir);
   collection.replace('PI_VSCODE_SESSION_RESTORE_MARKER', context.extension.id);
+  collection.replace('PI_VSCODE_SESSION_RESTORE_PI_EXTENSION_ENABLED', options.piExtensionEnabled ? '1' : '0');
 }

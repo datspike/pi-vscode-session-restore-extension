@@ -9,6 +9,7 @@ export interface ExtensionConfig {
   confidenceThreshold: Confidence;
   diagnosticsLevel: DiagnosticsLevel;
   recordTtlDays: number;
+  installPiExtension: boolean;
 }
 
 export interface PiInvocation {
@@ -21,6 +22,7 @@ export interface PiInvocation {
   wrapperPid?: number;
   wrapperPpid?: number;
   sessionPath?: string;
+  terminalName?: string;
   source: 'shellIntegration' | 'wrapper';
 }
 
@@ -37,6 +39,21 @@ export interface WrapperEvent {
   marker?: string;
   sessionPath?: string;
 }
+
+export interface PiSessionEvent {
+  event: 'pi-session-start';
+  time: number;
+  cwd: string;
+  pid: number;
+  ppid: number;
+  marker?: string;
+  sessionPath?: string;
+  sessionId?: string;
+  reason?: 'startup' | 'reload' | 'new' | 'resume' | 'fork';
+  previousSessionFile?: string;
+}
+
+export type TrackerEvent = WrapperEvent | PiSessionEvent;
 
 export interface SessionCandidate {
   path: string;
@@ -68,6 +85,7 @@ export interface RestoreRecord {
   reasons: string[];
   restoreAttempts: number;
   lastRestoreAt?: number;
+  terminalName?: string;
 }
 
 export interface RecordStoreData {

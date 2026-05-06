@@ -4,7 +4,8 @@ import * as vscode from 'vscode';
 import { readConfig } from './config.js';
 import { configurePathWrapper } from './env/pathWrapper.js';
 import { Logger } from './log.js';
-import { RestoreManager } from './restore/restoreManager.js';
+import { ensurePiSessionReporterInstalled } from './pi/piExtensionInstaller.js';
+import { getRestoreTerminalName, RestoreManager } from './restore/restoreManager.js';
 import { RecordStore } from './store/recordStore.js';
 import { TerminalTracker } from './tracker/terminalTracker.js';
 import { WrapperEventTail } from './tracker/wrapperEventTail.js';
@@ -18,11 +19,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const storageDir = context.globalStorageUri.fsPath;
   await mkdir(storageDir, { recursive: true });
   const eventLogPath = path.join(storageDir, 'wrapper-events.jsonl');
+  if (config.installPiExtension) {
+    await ensurePiSessionReporterInstalled(context.extensionUri, logger).catch((error: unknown) => {
+      logger.error(error instanceof Error ? error.message : String(error));
+    });
+  }
 
   const applyPathWrapper = (): void => configurePathWrapper(context, {
     extensionUri: context.extensionUri,
     eventLogPath,
-    enabled: config.enabled
+    enabled: config.enabled,
+    piExtensionEnabled: config.installPiExtension
   });
   applyPathWrapper();
 
@@ -31,7 +38,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   tracker.register(context);
   const tail = new WrapperEventTail(eventLogPath);
   const interval = setInterval(() => {
-    void tail.readNewEvents().then((events) => tracker.ingestWrapperEvents(events)).catch((error: unknown) => {
+    void tail.readNewEvents().then((events) => tracker.ingestEvents(events)).catch((error: unknown) => {
       logger.error(error instanceof Error ? error.message : String(error));
     });
   }, 2_000);
@@ -45,6 +52,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     config = readConfig();
     logger.setLevel(config.diagnosticsLevel);
     applyPathWrapper();
+    if (config.installPiExtension) {
+      void ensurePiSessionReporterInstalled(context.extensionUri, logger).catch((error: unknown) => {
+        logger.error(error instanceof Error ? error.message : String(error));
+      });
+    }
     logger.info('Pi Session Restore configuration reloaded.');
   }));
 
@@ -60,9 +72,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }));
 
   context.subscriptions.push(vscode.commands.registerCommand('piSessionRestore.restoreLast', async () => {
-    const terminal = vscode.window.activeTerminal ?? vscode.window.createTerminal('Pi Session Restore');
     const manager = new RestoreManager(store, getConfig());
-    const reason = await manager.restoreLast(terminal, getWorkspaceScopeCwd(), confirmRestore);
+    const scopeCwd = getWorkspaceScopeCwd();
+    const latestRecord = await store.latest(scopeCwd);
+    const terminal = vscode.window.activeTerminal ?? createRestoreTerminal(latestRecord);
+    const reason = await manager.restoreLast(terminal, scopeCwd, confirmRestore);
     logger.info(`Restore command result: ${reason}`);
   }));
 
@@ -117,15 +131,37 @@ async function runConservativeAutoRestore(
     return;
   }
 
-  const idleTerminals = await getIdleTerminals(vscode.window.terminals, logger);
+  const manager = new RestoreManager(store, config);
+  const idleTerminals = await waitForIdleTerminals(logger);
   if (idleTerminals.length === 0) {
     logger.info('Auto-restore skipped because no idle terminals are available.');
     return;
   }
 
-  const manager = new RestoreManager(store, config);
   const result = await manager.autoRestoreMany(idleTerminals, scopeCwd);
   logger.info(`Auto-restore result: restored=${result.restored}, skipped=${result.skipped.join('; ')}`);
+}
+
+async function waitForIdleTerminals(logger: Logger): Promise<vscode.Terminal[]> {
+  const retryDelaysMs = [0, 1_000, 2_000, 3_000];
+  for (const delayMs of retryDelaysMs) {
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+    const idleTerminals = await getIdleTerminals(vscode.window.terminals, logger);
+    if (idleTerminals.length > 0) {
+      return idleTerminals;
+    }
+  }
+  return [];
+}
+
+function createRestoreTerminal(record: RestoreRecord | undefined): vscode.Terminal {
+  return vscode.window.createTerminal({ name: getRestoreTerminalName(record) });
+}
+
+function sleep(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 async function getIdleTerminals(terminals: readonly vscode.Terminal[], logger: Logger): Promise<vscode.Terminal[]> {

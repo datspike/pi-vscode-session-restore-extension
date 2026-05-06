@@ -5,11 +5,14 @@ VS Code extension для прозрачного best-effort восстановл
 ## Как работает
 
 - При activation extension добавляет `resources/bin` в начало `PATH` только для новых VS Code integrated terminals через `ExtensionContext.environmentVariableCollection`.
+- Также extension ставит Pi-side reporter в `~/.pi/agent/extensions/pi-vscode-session-restore`, чтобы Pi мог сообщать authoritative `session_start` события после `/resume`, `/new`, `/fork` и CLI resume flows.
 - `resources/bin/pi` безопасно ищет настоящий `pi` дальше по `PATH`, исключая директорию wrapper.
 - Для обычного интерактивного запуска wrapper заранее назначает Pi session JSONL и запускает реальный CLI как `pi --session <path> ...`; явные session/resume/print/package-команды не переписываются.
+- `/resume` и `--resume` не получают новый `--session`: выбранный Pi session file пишет Pi-side reporter в общий event log.
 - Alias вида `p='pi'` не создаётся extension, но продолжает работать косвенно: shell раскрывает alias в `pi`, а дальше используется PATH wrapper.
-- VS Code-side tracker сохраняет локальные restore records из wrapper/shell events; shell integration используется как дополнительный best-effort источник.
+- VS Code-side tracker сохраняет локальные restore records из wrapper/shell/Pi-side events; shell integration используется как дополнительный best-effort источник.
 - Restore command строится через локально подтверждённый синтаксис `pi --session <path|id>`.
+- Restore records хранят snapshot названия terminal tab (`terminalName`) и используют его при создании новых restore terminals. Уже существующие shell-backed terminals публичный VS Code API переименовать не позволяет.
 
 ## Commands
 
@@ -25,14 +28,17 @@ VS Code extension для прозрачного best-effort восстановл
 - `piSessionRestore.confidenceThreshold`: `high`, `medium`, `low`.
 - `piSessionRestore.diagnosticsLevel`: `off`, `error`, `info`, `debug`.
 - `piSessionRestore.recordTtlDays`: TTL локальных записей.
+- `piSessionRestore.installPiExtension`: включает установку Pi-side reporter для точного отслеживания `/resume`; по умолчанию включено.
 
 ## Privacy
 
-Extension хранит только локальные диагностические события wrapper и restore records в `globalStorageUri` VS Code. Session contents не копируются.
+Extension хранит только локальные диагностические события wrapper/Pi-side reporter и restore records в `globalStorageUri` VS Code. Session contents не копируются.
 
 ## Known limitations
 
 - Не восстанавливает живой terminal process.
 - Не поддерживает tmux, Remote SSH, WSL и Dev Containers.
 - Auto-restore намеренно консервативный: работает только при `restorePolicy=auto-confident`, high-confidence records и известном workspace scope. Если VS Code восстановил несколько idle terminal tabs в одном workspace, extension пытается восстановить соответствующее количество последних Pi records этого workspace.
-- Shell integration в VS Code может быть недоступна; в этом случае используется wrapper event log и fallback `terminal.sendText` для ручной команды restore.
+- Auto-restore использует только уже существующие idle terminal tabs, восстановленные самим VS Code. Extension не создаёт новые terminal tabs на startup, чтобы не гоняться с VS Code terminal persistence и не плодить дубли.
+- Название terminal tab сохраняется best-effort: VS Code API позволяет читать `Terminal.name`, но не даёт публично переименовывать уже существующий shell-backed terminal.
+- Shell integration в VS Code может быть недоступна; в этом случае используется wrapper/Pi event log и fallback `terminal.sendText` для ручной команды restore.

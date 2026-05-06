@@ -1,12 +1,12 @@
 import { open, stat } from 'node:fs/promises';
-import type { WrapperEvent } from '../types.js';
+import type { TrackerEvent } from '../types.js';
 
 export class WrapperEventTail {
   private offset = 0;
 
   public constructor(private readonly filePath: string) {}
 
-  public async readNewEvents(): Promise<WrapperEvent[]> {
+  public async readNewEvents(): Promise<TrackerEvent[]> {
     const fileStat = await stat(this.filePath).catch(() => undefined);
     if (!fileStat?.isFile()) {
       return [];
@@ -24,23 +24,27 @@ export class WrapperEventTail {
       const buffer = Buffer.alloc(length);
       await handle.read(buffer, 0, length, this.offset);
       this.offset = fileStat.size;
-      return parseWrapperEvents(buffer.toString('utf8'));
+      return parseTrackerEvents(buffer.toString('utf8'));
     } finally {
       await handle.close();
     }
   }
 }
 
-export function parseWrapperEvents(raw: string): WrapperEvent[] {
-  const events: WrapperEvent[] = [];
+export function parseWrapperEvents(raw: string): TrackerEvent[] {
+  return parseTrackerEvents(raw);
+}
+
+export function parseTrackerEvents(raw: string): TrackerEvent[] {
+  const events: TrackerEvent[] = [];
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (trimmed.length === 0) {
       continue;
     }
     try {
-      const event = JSON.parse(trimmed) as WrapperEvent;
-      if (event.event === 'pi-wrapper-invocation' || event.event === 'pi-wrapper-exit') {
+      const event = JSON.parse(trimmed) as TrackerEvent;
+      if (event.event === 'pi-wrapper-invocation' || event.event === 'pi-wrapper-exit' || event.event === 'pi-session-start') {
         events.push(event);
       }
     } catch {

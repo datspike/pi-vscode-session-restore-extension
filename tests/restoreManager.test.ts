@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type * as vscode from 'vscode';
-import { RestoreManager } from '../src/restore/restoreManager.js';
+import { getRestoreTerminalName, RestoreManager } from '../src/restore/restoreManager.js';
 import { createRecordId, RecordStore } from '../src/store/recordStore.js';
 import type { ExtensionConfig, RestoreRecord } from '../src/types.js';
 
@@ -65,6 +65,27 @@ describe('RestoreManager', () => {
     expect(secondTerminal.commands).toEqual([`pi --session '${sessionPathB}'`]);
   });
 
+  test('test_get_restore_terminal_name_expected_uses_saved_title', () => {
+    'Имя терминала для restore берётся из сохранённого title snapshot.';
+    expect(getRestoreTerminalName({ ...makeRecord('/tmp/session.jsonl', 10_000, '/work/a'), terminalName: 'Kind dune' })).toBe('Kind dune');
+    expect(getRestoreTerminalName(makeRecord('/tmp/session.jsonl', 10_000, '/work/a'))).toBe('Pi Session Restore');
+  });
+
+  test('test_auto_restore_records_expected_order_matches_terminal_order', async () => {
+    'Записи для multi-restore идут от старой к новой, чтобы порядок вкладок был стабильным.';
+    const sessionPathA = path.join(tempDir, 'a.jsonl');
+    const sessionPathB = path.join(tempDir, 'b.jsonl');
+    await writeFile(sessionPathA, '{}\n', 'utf8');
+    await writeFile(sessionPathB, '{}\n', 'utf8');
+    const store = new RecordStore(tempDir, () => 20_000);
+    await store.add(makeRecord(sessionPathA, 10_000, '/work/a'), 30);
+    await store.add(makeRecord(sessionPathB, 11_000, '/work/a'), 30);
+
+    const records = await new RestoreManager(store, makeConfig('auto-confident')).getAutoRestoreRecords('/work/a', 2);
+
+    expect(records.map((record) => record.sessionPath)).toEqual([sessionPathA, sessionPathB]);
+  });
+
   test('test_auto_restore_scope_expected_uses_matching_workspace_record', async () => {
     'Auto-restore выбирает запись только из совпавшего workspace scope.';
     const sessionPathA = path.join(tempDir, 'a.jsonl');
@@ -119,6 +140,7 @@ function makeConfig(restorePolicy: ExtensionConfig['restorePolicy']): ExtensionC
     restorePolicy,
     confidenceThreshold: 'high',
     diagnosticsLevel: 'off',
-    recordTtlDays: 30
+    recordTtlDays: 30,
+    installPiExtension: true
   };
 }

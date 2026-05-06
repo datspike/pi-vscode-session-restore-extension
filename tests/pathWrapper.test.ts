@@ -68,6 +68,32 @@ describe('resources/bin/pi wrapper', () => {
     expect(lines[0]?.sessionPath).toMatch(/\.jsonl$/);
   });
 
+  test('test_wrapper_resume_slash_command_expected_does_not_allocate_session', async () => {
+    'Запуск pi /resume не получает новый --session, потому выбор старой сессии делает сам Pi.';
+    const wrapperDir = path.resolve('resources/bin');
+    const realDir = path.join(tempDir, 'real');
+    const sessionRoot = path.join(tempDir, 'sessions');
+    await mkdir(realDir, { recursive: true });
+    const realPi = path.join(realDir, 'pi');
+    await writeFile(realPi, '#!/usr/bin/env bash\nprintf "%s\\n" "$*"\nexit 0\n', 'utf8');
+    await chmod(realPi, 0o755);
+    const eventLog = path.join(tempDir, 'events.jsonl');
+
+    const result = await runWrapper(['/resume'], {
+      PATH: `${wrapperDir}${path.delimiter}${realDir}${path.delimiter}${process.env.PATH ?? ''}`,
+      PI_VSCODE_SESSION_RESTORE_EVENT_LOG: eventLog,
+      PI_VSCODE_SESSION_RESTORE_WRAPPER_DIR: wrapperDir,
+      PI_VSCODE_SESSION_RESTORE_SESSION_ROOT: sessionRoot,
+      PI_VSCODE_SESSION_RESTORE_MARKER: 'test-marker'
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe('/resume\n');
+    const lines = (await readFile(eventLog, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { argv: string[]; sessionPath?: string });
+    expect(lines[0]?.argv).toEqual(['pi', '/resume']);
+    expect(lines[0]?.sessionPath).toBeUndefined();
+  });
+
   test('test_wrapper_without_event_log_expected_does_not_allocate_session', async () => {
     'Вне VS Code wrapper не добавляет --session и не меняет обычный запуск pi.';
     const wrapperDir = path.resolve('resources/bin');
@@ -91,9 +117,13 @@ describe('resources/bin/pi wrapper', () => {
 
 function runWrapper(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
+    const childEnv = { ...process.env, ...env };
+    if (!Object.hasOwn(env, 'PI_VSCODE_SESSION_RESTORE_EVENT_LOG')) {
+      delete childEnv.PI_VSCODE_SESSION_RESTORE_EVENT_LOG;
+    }
     const child = spawn(path.resolve('resources/bin/pi'), args, {
       cwd: path.resolve('.'),
-      env: { ...process.env, ...env }
+      env: childEnv
     });
     let stdout = '';
     let stderr = '';
