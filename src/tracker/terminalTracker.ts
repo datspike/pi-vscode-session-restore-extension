@@ -90,7 +90,9 @@ export class TerminalTracker implements vscode.Disposable {
     if (invocation.sessionPath !== undefined) {
       const explicitSessionPath = await this.validateExplicitWrapperSession(invocation.sessionPath, invocation.cwd);
       if (explicitSessionPath !== undefined) {
-        await this.rememberShellSession(event.ppid, explicitSessionPath);
+        if (closedMarker === undefined) {
+          await this.rememberShellSession(event.ppid, explicitSessionPath);
+        }
         await this.storeDirectWrapperRecord(invocation, explicitSessionPath, closedMarker);
         return;
       }
@@ -131,14 +133,19 @@ export class TerminalTracker implements vscode.Disposable {
       return;
     }
     const terminalName = getTerminalTitleSnapshot(terminal);
+    const sessionPath = await this.findSessionPathForTerminal(terminal, shellPid);
+    this.recentlyClosedShells.set(shellPid, { terminalName, closedAt });
     const timer = setTimeout(() => {
       this.pendingClosedShells.delete(shellPid);
-      void this.confirmTerminalClosed(shellPid, terminalName, closedAt).catch((error: unknown) => {
+      void this.confirmTerminalClosed(shellPid, terminalName, closedAt, sessionPath).catch((error: unknown) => {
         this.logger.debug(error instanceof Error ? error.message : String(error));
       });
     }, TERMINAL_CLOSE_MARK_DELAY_MS);
     this.pendingClosedShells.set(shellPid, timer);
     this.terminalSessions.delete(terminal);
+    if (sessionPath !== undefined && this.shellSessions.get(shellPid) === sessionPath) {
+      this.shellSessions.delete(shellPid);
+    }
     this.logger.debug(`Scheduled Pi terminal close marker: name=${terminalName}, shellPid=${shellPid}`);
   }
 
@@ -164,7 +171,10 @@ export class TerminalTracker implements vscode.Disposable {
       restoreAttempts: 0
     };
 
-    await this.rememberShellSession(event.ppid, event.sessionPath);
+    const closedMarker = this.getRecentlyClosedShell(event.ppid, event.time);
+    if (closedMarker === undefined) {
+      await this.rememberShellSession(event.ppid, event.sessionPath);
+    }
     const terminalName = await this.findTerminalTitleByShellPid(event.ppid);
     if (terminalName !== undefined) {
       record.terminalName = terminalName;
@@ -173,7 +183,7 @@ export class TerminalTracker implements vscode.Disposable {
       await this.store.markTerminalClosed(event.previousSessionFile, terminalName, event.time);
       this.logger.debug(`Marked previous Pi session as inactive after ${event.reason ?? 'session switch'}: ${event.previousSessionFile}`);
     }
-    this.applyClosedMarker(record, this.getRecentlyClosedShell(event.ppid, event.time));
+    this.applyClosedMarker(record, closedMarker);
     await this.store.add(record, this.getConfig().recordTtlDays);
     this.logger.info('Stored authoritative Pi session record from Pi extension.');
   }
@@ -250,11 +260,13 @@ export class TerminalTracker implements vscode.Disposable {
       restoreAttempts: 0
     };
     this.applyInvocationMetadata(record, invocation);
-    if (invocation.shellPid !== undefined) {
-      await this.rememberShellSession(invocation.shellPid, match.candidate.path);
-    }
-    if (invocation.wrapperPpid !== undefined) {
-      await this.rememberShellSession(invocation.wrapperPpid, match.candidate.path);
+    if (closedMarker === undefined) {
+      if (invocation.shellPid !== undefined) {
+        await this.rememberShellSession(invocation.shellPid, match.candidate.path);
+      }
+      if (invocation.wrapperPpid !== undefined) {
+        await this.rememberShellSession(invocation.wrapperPpid, match.candidate.path);
+      }
     }
     this.applyClosedMarker(record, closedMarker);
     await this.store.add(record, config.recordTtlDays);
@@ -317,9 +329,14 @@ export class TerminalTracker implements vscode.Disposable {
     }
   }
 
-  private async confirmTerminalClosed(shellPid: number, terminalName: string, closedAt: number): Promise<void> {
+  private async confirmTerminalClosed(
+    shellPid: number,
+    terminalName: string,
+    closedAt: number,
+    closedSessionPath?: string
+  ): Promise<void> {
     this.recentlyClosedShells.set(shellPid, { terminalName, closedAt });
-    const sessionPath = this.shellSessions.get(shellPid);
+    const sessionPath = closedSessionPath ?? this.shellSessions.get(shellPid);
     if (sessionPath === undefined) {
       this.logger.debug(`Delayed Pi terminal close marker is waiting for session path: shellPid=${shellPid}`);
       return;
