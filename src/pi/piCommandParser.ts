@@ -44,10 +44,26 @@ export function parseWrapperArgv(argv: string[], startedAt: number, cwd: string,
     wrapperPpid: ppid,
     source: 'wrapper'
   };
-  if (sessionPath !== undefined) {
-    invocation.sessionPath = sessionPath;
+  const explicitSessionPath = sessionPath ?? getExplicitSessionArg(invocation.args);
+  if (explicitSessionPath !== undefined) {
+    invocation.sessionPath = explicitSessionPath;
   }
   return invocation;
+}
+
+export function getExplicitSessionArg(args: string[]): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--session') {
+      const sessionPath = args[index + 1];
+      return isSessionPathArg(sessionPath) ? sessionPath : undefined;
+    }
+    if (arg?.startsWith('--session=')) {
+      const sessionPath = arg.slice('--session='.length);
+      return isSessionPathArg(sessionPath) ? sessionPath : undefined;
+    }
+  }
+  return undefined;
 }
 
 export function tokenize(commandText: string): string[] {
@@ -96,5 +112,9 @@ export function tokenize(commandText: string): string[] {
 function normalizeCommandToken(token: string): 'pi' | 'p' | string {
   const command = token.split('/').at(-1) ?? token;
   return command === 'pi' || command === 'p' ? command : token;
+}
+
+function isSessionPathArg(value: string | undefined): value is string {
+  return value !== undefined && value.trim().length > 0 && !value.startsWith('-');
 }
 

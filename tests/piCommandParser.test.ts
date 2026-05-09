@@ -37,8 +37,15 @@ describe('piCommandParser', () => {
       cwd: '/work',
       wrapperPid: 10,
       wrapperPpid: 9,
+      sessionPath: '/tmp/s.jsonl',
       source: 'wrapper'
     });
+  });
+
+  test('test_parse_wrapper_argv_with_session_equals_expected_session_path', () => {
+    'Wrapper argv извлекает explicit --session=... без Pi-side события.';
+    const invocation = parseWrapperArgv(['pi', '--session=/tmp/s.jsonl'], 3_000, '/work', 10, 9);
+    expect(invocation.sessionPath).toBe('/tmp/s.jsonl');
   });
 
   test('test_tokenize_escaped_space_expected_single_arg', () => {

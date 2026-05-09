@@ -1,8 +1,10 @@
+import { stat } from 'node:fs/promises';
+import path from 'node:path';
 import * as vscode from 'vscode';
 import type { Logger } from '../log.js';
 import { parseShellCommand, parseWrapperArgv } from '../pi/piCommandParser.js';
 import { createRecordId, type RecordStore } from '../store/recordStore.js';
-import { SessionLocator } from '../session/sessionLocator.js';
+import { readPiSessionMetadata, SessionLocator } from '../session/sessionLocator.js';
 import { SessionMatcher } from '../session/sessionMatcher.js';
 import { getTerminalTitleSnapshot } from './terminalTitle.js';
 import type { ExtensionConfig, PiInvocation, PiSessionEvent, RestoreRecord, TrackerEvent, WrapperEvent } from '../types.js';
@@ -85,12 +87,15 @@ export class TerminalTracker implements vscode.Disposable {
     if (closedMarker !== undefined) {
       invocation.terminalName = closedMarker.terminalName;
     }
-    if (event.sessionPath !== undefined) {
-      await this.rememberShellSession(event.ppid, event.sessionPath);
-      await this.storeDirectWrapperRecord(invocation, event.sessionPath, closedMarker);
-    } else {
-      await this.matchAndStore(invocation, closedMarker);
+    if (invocation.sessionPath !== undefined) {
+      const explicitSessionPath = await this.validateExplicitWrapperSession(invocation.sessionPath, invocation.cwd);
+      if (explicitSessionPath !== undefined) {
+        await this.rememberShellSession(event.ppid, explicitSessionPath);
+        await this.storeDirectWrapperRecord(invocation, explicitSessionPath, closedMarker);
+        return;
+      }
     }
+    await this.matchAndStore(invocation, closedMarker);
   }
 
   private async onShellExecutionStart(event: vscode.TerminalShellExecutionStartEvent): Promise<void> {
@@ -173,6 +178,28 @@ export class TerminalTracker implements vscode.Disposable {
     this.logger.info('Stored authoritative Pi session record from Pi extension.');
   }
 
+  private async validateExplicitWrapperSession(sessionPath: string, cwd: string | undefined): Promise<string | undefined> {
+    if (path.extname(sessionPath) !== '.jsonl') {
+      this.logger.debug('Explicit Pi session path from wrapper argv skipped because it is not a JSONL file.');
+      return undefined;
+    }
+    const fileStat = await stat(sessionPath).catch(() => undefined);
+    if (!fileStat?.isFile()) {
+      this.logger.debug('Explicit Pi session path from wrapper argv skipped because file is absent.');
+      return undefined;
+    }
+    const metadata = await readPiSessionMetadata(sessionPath).catch(() => undefined);
+    if (metadata === undefined) {
+      this.logger.debug('Explicit Pi session path from wrapper argv skipped because file is not a Pi session JSONL.');
+      return undefined;
+    }
+    if (cwd !== undefined && metadata.cwd !== undefined && path.resolve(metadata.cwd) !== path.resolve(cwd)) {
+      this.logger.debug('Explicit Pi session path from wrapper argv skipped because session cwd does not match invocation cwd.');
+      return undefined;
+    }
+    return sessionPath;
+  }
+
   private async storeDirectWrapperRecord(
     invocation: PiInvocation,
     sessionPath: string,
@@ -188,7 +215,7 @@ export class TerminalTracker implements vscode.Disposable {
       matchedAt,
       confidence: 'high',
       score: 100,
-      reasons: ['wrapper allocated explicit Pi session path'],
+      reasons: ['wrapper reported explicit Pi session path'],
       restoreAttempts: 0
     };
     this.applyInvocationMetadata(record, invocation);

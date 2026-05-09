@@ -68,8 +68,13 @@ describe('resources/bin/pi wrapper', () => {
     expect(lines[0]?.sessionPath).toMatch(/\.jsonl$/);
   });
 
-  test('test_wrapper_resume_slash_command_expected_does_not_allocate_session', async () => {
-    'Запуск pi /resume не получает новый --session, потому выбор старой сессии делает сам Pi.';
+  test.each([
+    { name: 'slash resume', args: ['/resume'] },
+    { name: 'flag resume', args: ['--resume'] },
+    { name: 'flag fork', args: ['--fork'] },
+    { name: 'package command', args: ['install', 'pkg'] }
+  ])('test_wrapper_no_allocation_for_$name_expected_real_pi_gets_original_args', async ({ args }) => {
+    'Resume, fork и package-команды не получают новый --session от wrapper.';
     const wrapperDir = path.resolve('resources/bin');
     const realDir = path.join(tempDir, 'real');
     const sessionRoot = path.join(tempDir, 'sessions');
@@ -79,7 +84,7 @@ describe('resources/bin/pi wrapper', () => {
     await chmod(realPi, 0o755);
     const eventLog = path.join(tempDir, 'events.jsonl');
 
-    const result = await runWrapper(['/resume'], {
+    const result = await runWrapper(args, {
       PATH: `${wrapperDir}${path.delimiter}${realDir}${path.delimiter}${process.env.PATH ?? ''}`,
       PI_VSCODE_SESSION_RESTORE_EVENT_LOG: eventLog,
       PI_VSCODE_SESSION_RESTORE_WRAPPER_DIR: wrapperDir,
@@ -88,9 +93,9 @@ describe('resources/bin/pi wrapper', () => {
     });
 
     expect(result.code).toBe(0);
-    expect(result.stdout).toBe('/resume\n');
+    expect(result.stdout).toBe(`${args.join(' ')}\n`);
     const lines = (await readFile(eventLog, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { argv: string[]; sessionPath?: string });
-    expect(lines[0]?.argv).toEqual(['pi', '/resume']);
+    expect(lines[0]?.argv).toEqual(['pi', ...args]);
     expect(lines[0]?.sessionPath).toBeUndefined();
   });
 
