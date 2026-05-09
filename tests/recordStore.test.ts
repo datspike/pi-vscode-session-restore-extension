@@ -51,6 +51,18 @@ describe('RecordStore', () => {
     expect((await store.read()).records).toEqual([{ ...resumeRecord, terminalName: 'Kind dune' }]);
   });
 
+  test('test_concurrent_add_from_two_instances_expected_keeps_all_records', async () => {
+    'Параллельные add из разных экземпляров хранилища не затирают записи друг друга.';
+    const firstStore = new RecordStore(tempDir, () => 20_000);
+    const secondStore = new RecordStore(tempDir, () => 20_000);
+    const records = Array.from({ length: 20 }, (_, index) => makeRecord(`/tmp/session-${index}.jsonl`, 10_000 + index));
+
+    await Promise.all(records.map((record, index) => (index % 2 === 0 ? firstStore : secondStore).add(record, 30)));
+
+    const storedPaths = (await firstStore.read()).records.map((record) => record.sessionPath).sort();
+    expect(storedPaths).toEqual(records.map((record) => record.sessionPath).sort());
+  });
+
   test('test_update_terminal_name_expected_updates_matching_session', async () => {
     'Поздний rename terminal tab обновляет сохранённый title snapshot.';
     const store = new RecordStore(tempDir, () => 20_000);
@@ -84,6 +96,28 @@ describe('RecordStore', () => {
     await store.markTerminalClosed('/tmp/session.jsonl', 'Industry task', 12_000);
 
     expect(await store.latest()).toEqual({ ...targetRecord, terminalName: 'Industry task', terminalClosedAt: 12_000 });
+  });
+
+  test('test_concurrent_update_and_close_from_two_instances_expected_keeps_restore_and_close_markers', async () => {
+    'Параллельные update и close из разных экземпляров сохраняют оба маркера записи.';
+    const firstStore = new RecordStore(tempDir, () => 20_000);
+    const secondStore = new RecordStore(tempDir, () => 20_000);
+    const targetRecord = makeRecord('/tmp/session.jsonl', 10_000);
+    const restoredRecord = { ...targetRecord, restoreAttempts: 1, lastRestoreAt: 11_000 };
+
+    await firstStore.add(targetRecord, 30);
+    await Promise.all([
+      firstStore.update(restoredRecord),
+      secondStore.markTerminalClosed('/tmp/session.jsonl', 'Industry task', 12_000)
+    ]);
+
+    expect(await firstStore.latest()).toEqual({
+      ...targetRecord,
+      restoreAttempts: 1,
+      lastRestoreAt: 11_000,
+      terminalName: 'Industry task',
+      terminalClosedAt: 12_000
+    });
   });
 
   test('test_add_closed_record_expected_persists_delayed_close_marker', async () => {

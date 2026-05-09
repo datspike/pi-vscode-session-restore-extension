@@ -1,14 +1,18 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RecordStoreData, RestoreRecord } from '../types.js';
 
 const SCHEMA_VERSION = 1 as const;
+const LOCK_STALE_MS = 30_000;
+const LOCK_RETRY_MS = 10;
 
 export class RecordStore {
   private readonly filePath: string;
+  private readonly lockPath: string;
 
   public constructor(storageDir: string, private readonly now: () => number = Date.now) {
     this.filePath = path.join(storageDir, 'records.json');
+    this.lockPath = `${this.filePath}.lock`;
   }
 
   public async read(): Promise<RecordStoreData> {
@@ -25,25 +29,27 @@ export class RecordStore {
   }
 
   public async save(records: RestoreRecord[]): Promise<void> {
-    await mkdir(path.dirname(this.filePath), { recursive: true });
-    const temporaryPath = `${this.filePath}.${process.pid}.tmp`;
-    const payload = JSON.stringify({ schemaVersion: SCHEMA_VERSION, records }, null, 2);
-    await writeFile(temporaryPath, `${payload}\n`, 'utf8');
-    await rename(temporaryPath, this.filePath);
+    await this.withStoreLock(async () => {
+      await this.writeRecords(records);
+    });
   }
 
   public async add(record: RestoreRecord, ttlDays: number): Promise<void> {
-    const data = await this.read();
-    const pruned = pruneRecords(data.records, ttlDays, this.now());
-    const duplicate = pruned.find((candidate) => candidate.id === record.id || candidate.sessionPath === record.sessionPath);
-    const mergedRecord = duplicate ? mergeRestoreRecord(record, duplicate) : record;
-    const withoutDuplicate = pruned.filter((candidate) => candidate.id !== record.id && candidate.sessionPath !== record.sessionPath);
-    await this.save([mergedRecord, ...withoutDuplicate]);
+    await this.withStoreLock(async () => {
+      const data = await this.read();
+      const pruned = pruneRecords(data.records, ttlDays, this.now());
+      const duplicate = pruned.find((candidate) => candidate.id === record.id || candidate.sessionPath === record.sessionPath);
+      const mergedRecord = duplicate ? mergeRestoreRecord(record, duplicate) : record;
+      const withoutDuplicate = pruned.filter((candidate) => candidate.id !== record.id && candidate.sessionPath !== record.sessionPath);
+      await this.writeRecords([mergedRecord, ...withoutDuplicate]);
+    });
   }
 
   public async update(record: RestoreRecord): Promise<void> {
-    const data = await this.read();
-    await this.save(data.records.map((candidate) => candidate.id === record.id ? record : candidate));
+    await this.withStoreLock(async () => {
+      const data = await this.read();
+      await this.writeRecords(data.records.map((candidate) => candidate.id === record.id ? mergeRestoreRecord(record, candidate) : candidate));
+    });
   }
 
   public async updateTerminalName(sessionPath: string, terminalName: string): Promise<boolean> {
@@ -51,36 +57,40 @@ export class RecordStore {
     if (normalizedName.length === 0) {
       return false;
     }
-    const data = await this.read();
-    let changed = false;
-    const records = data.records.map((record) => {
-      if (record.sessionPath !== sessionPath || record.terminalName === normalizedName) {
-        return record;
+    return this.withStoreLock(async () => {
+      const data = await this.read();
+      let changed = false;
+      const records = data.records.map((record) => {
+        if (record.sessionPath !== sessionPath || record.terminalName === normalizedName) {
+          return record;
+        }
+        changed = true;
+        return { ...record, terminalName: normalizedName };
+      });
+      if (!changed) {
+        return false;
       }
-      changed = true;
-      return { ...record, terminalName: normalizedName };
+      await this.writeRecords(records);
+      return true;
     });
-    if (!changed) {
-      return false;
-    }
-    await this.save(records);
-    return true;
   }
 
   public async markTerminalClosed(sessionPath: string, terminalName: string | undefined, closedAt: number): Promise<void> {
     const normalizedName = terminalName?.trim();
-    const data = await this.read();
-    const records = data.records.map((record) => {
-      if (record.sessionPath !== sessionPath) {
-        return record;
-      }
-      const updated: RestoreRecord = { ...record, terminalClosedAt: closedAt };
-      if (normalizedName && normalizedName.length > 0) {
-        updated.terminalName = normalizedName;
-      }
-      return updated;
+    await this.withStoreLock(async () => {
+      const data = await this.read();
+      const records = data.records.map((record) => {
+        if (record.sessionPath !== sessionPath) {
+          return record;
+        }
+        const updated: RestoreRecord = { ...record, terminalClosedAt: closedAt };
+        if (normalizedName && normalizedName.length > 0) {
+          updated.terminalName = normalizedName;
+        }
+        return updated;
+      });
+      await this.writeRecords(records);
     });
-    await this.save(records);
   }
 
   public async clear(): Promise<void> {
@@ -97,6 +107,52 @@ export class RecordStore {
       ? data.records
       : data.records.filter((record) => record.cwd === scopeCwd);
     return [...scopedRecords].sort((left: RestoreRecord, right: RestoreRecord) => right.matchedAt - left.matchedAt);
+  }
+
+  private async writeRecords(records: RestoreRecord[]): Promise<void> {
+    await mkdir(path.dirname(this.filePath), { recursive: true });
+    const temporaryPath = `${this.filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+    const payload = JSON.stringify({ schemaVersion: SCHEMA_VERSION, records }, null, 2);
+    await writeFile(temporaryPath, `${payload}\n`, 'utf8');
+    await rename(temporaryPath, this.filePath);
+  }
+
+  private async withStoreLock<T>(operation: () => Promise<T>): Promise<T> {
+    await this.acquireLock();
+    try {
+      return await operation();
+    } finally {
+      await rm(this.lockPath, { recursive: true, force: true });
+    }
+  }
+
+  private async acquireLock(): Promise<void> {
+    await mkdir(path.dirname(this.filePath), { recursive: true });
+    while (true) {
+      try {
+        await mkdir(this.lockPath);
+        return;
+      } catch (error: unknown) {
+        if (!isFileExistsError(error)) {
+          throw error;
+        }
+        await this.removeStaleLock();
+        await delay(LOCK_RETRY_MS);
+      }
+    }
+  }
+
+  private async removeStaleLock(): Promise<void> {
+    try {
+      const lockStat = await stat(this.lockPath);
+      if (Date.now() - lockStat.mtimeMs > LOCK_STALE_MS) {
+        await rm(this.lockPath, { recursive: true, force: true });
+      }
+    } catch (error: unknown) {
+      if (!isMissingFileError(error)) {
+        throw error;
+      }
+    }
   }
 }
 
@@ -135,4 +191,22 @@ export function mergeRestoreRecord(incoming: RestoreRecord, existing: RestoreRec
 
 function emptyStore(): RecordStoreData {
   return { schemaVersion: SCHEMA_VERSION, records: [] };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isFileExistsError(error: unknown): boolean {
+  return isNodeError(error) && error.code === 'EEXIST';
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return isNodeError(error) && error.code === 'ENOENT';
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
 }
