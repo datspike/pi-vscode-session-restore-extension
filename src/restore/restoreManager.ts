@@ -58,9 +58,10 @@ export function selectAutoRestorePairs(
   }
 
   const unmatchedTargets = targets.filter((target) => !pairs.some((pair) => pair.target === target));
+  const ambiguousFallbackTargets = getAmbiguousFallbackTargets(unmatchedTargets);
   for (let index = 0; index < unmatchedTargets.length; index += 1) {
     const target = unmatchedTargets[index];
-    if (target === undefined) {
+    if (target === undefined || ambiguousFallbackTargets.has(target)) {
       continue;
     }
     const remainingTargetCount = unmatchedTargets.length - index;
@@ -74,6 +75,23 @@ export function selectAutoRestorePairs(
   }
 
   return pairs.sort((left, right) => targets.indexOf(left.target) - targets.indexOf(right.target));
+}
+
+function getAmbiguousFallbackTargets(targets: readonly AutoRestoreTarget[]): Set<AutoRestoreTarget> {
+  const ambiguousTargets = new Set<AutoRestoreTarget>();
+  const targetTitleCounts = countTargetTitles(targets);
+  for (const target of targets) {
+    const title = normalizeTitle(target.title);
+    if (title !== undefined && targetTitleCounts.get(title) !== 1) {
+      const sameTitleTargets = targets.filter((candidate) => normalizeTitle(candidate.title) === title);
+      const cwd = target.cwd;
+      const hasUniqueCwdSignal = cwd !== undefined && sameTitleTargets.filter((candidate) => candidate.cwd === cwd).length === 1;
+      if (!hasUniqueCwdSignal) {
+        ambiguousTargets.add(target);
+      }
+    }
+  }
+  return ambiguousTargets;
 }
 
 function isFallbackRestorableRecordForTarget(record: RestoreRecord, target: AutoRestoreTarget): boolean {

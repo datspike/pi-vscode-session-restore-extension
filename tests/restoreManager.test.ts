@@ -208,30 +208,24 @@ describe('RestoreManager', () => {
     expect(selectAutoRestorePairs([firstResume, secondResume], [target])).toEqual([{ target, record: secondResume }]);
   });
 
-  test('test_select_auto_restore_pairs_duplicate_titles_expected_uses_fallback_order', () => {
-    'Одинаковые titles у вкладок не используются для неоднозначного title-match.';
+  test('test_select_auto_restore_pairs_duplicate_titles_ambiguous_order_expected_skips_fallback', () => {
+    'Одинаковые titles без устойчивого сигнала не раскладываются по порядку вкладок.';
     const oldRecord = { ...makeRecord('/tmp/old.jsonl', 10_000, '/work/a'), terminalName: 'pi' };
     const newRecord = { ...makeRecord('/tmp/new.jsonl', 12_000, '/work/a'), terminalName: 'pi' };
     const firstTarget = { terminal: makeTerminal(), title: 'pi' };
     const secondTarget = { terminal: makeTerminal(), title: 'pi' };
 
-    expect(selectAutoRestorePairs([oldRecord, newRecord], [firstTarget, secondTarget])).toEqual([
-      { target: firstTarget, record: oldRecord },
-      { target: secondTarget, record: newRecord }
-    ]);
+    expect(selectAutoRestorePairs([oldRecord, newRecord], [firstTarget, secondTarget])).toEqual([]);
   });
 
-  test('test_select_auto_restore_pairs_duplicate_titles_expected_allows_closed_marker_when_title_visible', () => {
-    'Fallback допускает closed marker только когда такая вкладка реально восстановлена VS Code.';
+  test('test_select_auto_restore_pairs_duplicate_titles_closed_markers_expected_skip_ambiguous_fallback', () => {
+    'Одинаковые visible titles с closed markers не восстанавливаются по неоднозначному порядку вкладок.';
     const oldRecord = { ...makeRecord('/tmp/old.jsonl', 10_000, '/work/a'), terminalName: 'pi', terminalClosedAt: 12_500 };
     const newRecord = { ...makeRecord('/tmp/new.jsonl', 12_000, '/work/a'), terminalName: 'pi', terminalClosedAt: 12_500 };
     const firstTarget = { terminal: makeTerminal(), title: 'pi' };
     const secondTarget = { terminal: makeTerminal(), title: 'pi' };
 
-    expect(selectAutoRestorePairs([oldRecord, newRecord], [firstTarget, secondTarget])).toEqual([
-      { target: firstTarget, record: oldRecord },
-      { target: secondTarget, record: newRecord }
-    ]);
+    expect(selectAutoRestorePairs([oldRecord, newRecord], [firstTarget, secondTarget])).toEqual([]);
   });
 
   test('test_select_auto_restore_pairs_closed_title_expected_not_used_for_unrelated_target', () => {
