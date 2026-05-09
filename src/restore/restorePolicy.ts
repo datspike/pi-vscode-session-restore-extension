@@ -7,7 +7,7 @@ const CONFIDENCE_RANK: Record<Confidence, number> = {
   high: 3
 };
 
-const RECENT_RESTORE_COOLDOWN_MS = 15_000;
+export const RECENT_RESTORE_COOLDOWN_MS = 15_000;
 
 export class RestorePolicy {
   public constructor(

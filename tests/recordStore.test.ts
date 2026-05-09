@@ -63,6 +63,22 @@ describe('RecordStore', () => {
     expect(storedPaths).toEqual(records.map((record) => record.sessionPath).sort());
   });
 
+  test('test_claim_restore_from_two_instances_expected_only_one_claim_succeeds', async () => {
+    'Claim restore под общим lock выдаёт одну попытку при конкуренции двух экземпляров.';
+    const firstStore = new RecordStore(tempDir, () => 20_000);
+    const secondStore = new RecordStore(tempDir, () => 20_000);
+    const targetRecord = makeRecord('/tmp/session.jsonl', 10_000);
+
+    await firstStore.add(targetRecord, 30);
+    const claims = await Promise.all([
+      firstStore.claimRestore(targetRecord.id, 11_000, 15_000),
+      secondStore.claimRestore(targetRecord.id, 11_000, 15_000)
+    ]);
+
+    expect(claims.filter((record) => record !== undefined)).toHaveLength(1);
+    expect(await firstStore.latest()).toMatchObject({ restoreAttempts: 1, lastRestoreAt: 11_000 });
+  });
+
   test('test_update_terminal_name_expected_updates_matching_session', async () => {
     'Поздний rename terminal tab обновляет сохранённый title snapshot.';
     const store = new RecordStore(tempDir, () => 20_000);

@@ -113,6 +113,7 @@ describe('RestoreManager', () => {
     await writeFile(sessionPath, '{}\n', 'utf8');
     const store = new RecordStore(tempDir, () => 20_000);
     const record = { ...makeRecord(sessionPath, 10_000, '/work/a'), terminalName: 'Pi-test-1' };
+    await store.add(record, 30);
     const terminal = makeTerminal();
     const renamed: string[] = [];
 
@@ -210,6 +211,29 @@ describe('RestoreManager', () => {
     ]);
   });
 
+  test('test_auto_restore_concurrent_managers_same_scope_expected_claims_record_once', async () => {
+    'Два менеджера на одном global storage не восстанавливают одну запись дважды.';
+    const scopeCwd = '/work/a';
+    const sessionPath = path.join(tempDir, 'session.jsonl');
+    await writeFile(sessionPath, '{}\n', 'utf8');
+    const writerStore = new RecordStore(tempDir, () => 20_000);
+    await writerStore.add(makeRecord(sessionPath, 10_000, scopeCwd), 30);
+    const firstStore = new RecordStore(tempDir, () => 20_000);
+    const secondStore = new RecordStore(tempDir, () => 20_000);
+    synchronizeListForScope([firstStore, secondStore], 2);
+    const firstTerminal = makeTerminal();
+    const secondTerminal = makeTerminal();
+
+    const results = await Promise.all([
+      new RestoreManager(firstStore, makeConfig('auto-confident')).autoRestoreTargets([{ terminal: firstTerminal }], scopeCwd),
+      new RestoreManager(secondStore, makeConfig('auto-confident')).autoRestoreTargets([{ terminal: secondTerminal }], scopeCwd)
+    ]);
+
+    expect(results.map((result) => result.restored).sort()).toEqual([0, 1]);
+    expect([...firstTerminal.commands, ...secondTerminal.commands]).toEqual([`pi --session '${sessionPath}'`]);
+    expect((await writerStore.latest(scopeCwd))?.restoreAttempts).toBe(1);
+  });
+
   test('test_auto_restore_scope_expected_uses_matching_workspace_record', async () => {
     'Auto-restore выбирает запись только из совпавшего workspace scope.';
     const sessionPathA = path.join(tempDir, 'a.jsonl');
@@ -239,6 +263,26 @@ function makeTerminal(): FakeTerminal {
     show: () => undefined,
     sendText: (text: string) => { commands.push(text); }
   } as unknown as FakeTerminal;
+}
+
+function synchronizeListForScope(stores: RecordStore[], expectedCalls: number): void {
+  let calls = 0;
+  let release: (() => void) | undefined;
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  for (const store of stores) {
+    const originalListForScope = store.listForScope.bind(store);
+    store.listForScope = async (scopeCwd?: string) => {
+      const records = await originalListForScope(scopeCwd);
+      calls += 1;
+      if (calls >= expectedCalls) {
+        release?.();
+      }
+      await barrier;
+      return records;
+    };
+  }
 }
 
 function makeRecord(sessionPath: string, matchedAt: number, cwd: string): RestoreRecord {

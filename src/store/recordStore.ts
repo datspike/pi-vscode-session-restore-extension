@@ -52,6 +52,26 @@ export class RecordStore {
     });
   }
 
+  public async claimRestore(recordId: string, claimedAt: number, cooldownMs: number): Promise<RestoreRecord | undefined> {
+    return this.withStoreLock(async () => {
+      const data = await this.read();
+      const target = data.records.find((record) => record.id === recordId);
+      if (target === undefined) {
+        return undefined;
+      }
+      if (target.lastRestoreAt !== undefined && claimedAt - target.lastRestoreAt < cooldownMs) {
+        return undefined;
+      }
+      const claimedRecord: RestoreRecord = {
+        ...target,
+        restoreAttempts: target.restoreAttempts + 1,
+        lastRestoreAt: claimedAt
+      };
+      await this.writeRecords(data.records.map((record) => record.id === recordId ? claimedRecord : record));
+      return claimedRecord;
+    });
+  }
+
   public async updateTerminalName(sessionPath: string, terminalName: string): Promise<boolean> {
     const normalizedName = terminalName.trim();
     if (normalizedName.length === 0) {

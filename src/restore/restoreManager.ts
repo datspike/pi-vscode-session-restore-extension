@@ -1,6 +1,6 @@
 import type * as vscode from 'vscode';
 import { PiCliAdapter } from '../pi/piCliAdapter.js';
-import { RestorePolicy } from './restorePolicy.js';
+import { RECENT_RESTORE_COOLDOWN_MS, RestorePolicy } from './restorePolicy.js';
 import type { ExtensionConfig, RestoreRecord } from '../types.js';
 import type { RecordStore } from '../store/recordStore.js';
 
@@ -133,8 +133,8 @@ export class RestoreManager {
         return 'restore cancelled by user';
       }
     }
-    await this.executeRestore(terminal, record);
-    return decision.reason;
+    const restored = await this.executeRestore(terminal, record);
+    return restored ? decision.reason : 'restore was attempted recently for this record';
   }
 
   public async autoRestore(terminal: vscode.Terminal, scopeCwd?: string): Promise<string> {
@@ -146,8 +146,8 @@ export class RestoreManager {
     if (!record || decision.action !== 'auto') {
       return decision.reason;
     }
-    await this.executeRestore(terminal, record);
-    return decision.reason;
+    const restored = await this.executeRestore(terminal, record);
+    return restored ? decision.reason : 'restore was attempted recently for this record';
   }
 
   public async autoRestoreMany(terminals: readonly vscode.Terminal[], scopeCwd?: string): Promise<AutoRestoreManyResult> {
@@ -172,7 +172,11 @@ export class RestoreManager {
         skipped.push(`${pair.record.sessionPath}: ${decision.reason}`);
         continue;
       }
-      await this.executeRestore(pair.target.terminal, pair.record);
+      const restoreClaimed = await this.executeRestore(pair.target.terminal, pair.record);
+      if (!restoreClaimed) {
+        skipped.push(`${pair.record.sessionPath}: restore was attempted recently for this record`);
+        continue;
+      }
       restored += 1;
     }
     if (pairs.length === 0) {
@@ -181,10 +185,14 @@ export class RestoreManager {
     return { restored, skipped };
   }
 
-  public async executeRestore(terminal: vscode.Terminal, record: RestoreRecord): Promise<void> {
-    const command = this.adapter.buildResumeCommand(record.sessionPath);
+  public async executeRestore(terminal: vscode.Terminal, record: RestoreRecord): Promise<boolean> {
+    const claimedRecord = await this.store.claimRestore(record.id, Date.now(), RECENT_RESTORE_COOLDOWN_MS);
+    if (claimedRecord === undefined) {
+      return false;
+    }
+    const command = this.adapter.buildResumeCommand(claimedRecord.sessionPath);
     terminal.show();
-    const terminalName = record.terminalName?.trim();
+    const terminalName = claimedRecord.terminalName?.trim();
     if (terminalName && terminalName.length > 0) {
       await this.terminalRenamer(terminal, terminalName);
     }
@@ -193,12 +201,7 @@ export class RestoreManager {
     } else {
       terminal.sendText(command, true);
     }
-    const updated: RestoreRecord = {
-      ...record,
-      restoreAttempts: record.restoreAttempts + 1,
-      lastRestoreAt: Date.now()
-    };
-    await this.store.update(updated);
+    return true;
   }
 
   public async getAutoRestoreRecords(scopeCwd: string, terminalCount: number): Promise<RestoreRecord[]> {
