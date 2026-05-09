@@ -46,8 +46,8 @@ describe('RestoreManager', () => {
     expect(terminal.commands).toEqual([]);
   });
 
-  test('test_auto_restore_many_scope_expected_restores_two_sessions_in_two_terminals', async () => {
-    'Auto-restore восстанавливает две Pi-сессии в две восстановленные вкладки терминала.';
+  test('test_auto_restore_targets_explicit_cwd_expected_restores_two_sessions_in_two_terminals', async () => {
+    'Auto-restore восстанавливает Pi-сессии во вкладки с явным cwd-сигналом.';
     const sessionPathA = path.join(tempDir, 'a.jsonl');
     const sessionPathB = path.join(tempDir, 'b.jsonl');
     await writeFile(sessionPathA, '{}\n', 'utf8');
@@ -58,11 +58,34 @@ describe('RestoreManager', () => {
     const firstTerminal = makeTerminal();
     const secondTerminal = makeTerminal();
 
-    const result = await new RestoreManager(store, makeConfig('auto-confident')).autoRestoreMany([firstTerminal, secondTerminal], '/work/a');
+    const result = await new RestoreManager(store, makeConfig('auto-confident')).autoRestoreTargets([
+      { terminal: firstTerminal, cwd: '/work/a' },
+      { terminal: secondTerminal, cwd: '/work/a' }
+    ], '/work/a');
 
     expect(result).toEqual({ restored: 2, skipped: [] });
     expect(firstTerminal.commands).toEqual([`pi --session '${sessionPathA}'`]);
     expect(secondTerminal.commands).toEqual([`pi --session '${sessionPathB}'`]);
+  });
+
+  test('test_auto_restore_many_without_terminal_evidence_expected_skips_ordinary_idle_terminal', async () => {
+    'Обычная неактивная вкладка без названия и cwd не получает запасную запись.';
+    const sessionPath = path.join(tempDir, 'session.jsonl');
+    await writeFile(sessionPath, '{}\n', 'utf8');
+    const store = new RecordStore(tempDir, () => 20_000);
+    await store.add(makeRecord(sessionPath, 10_000, '/work/a'), 30);
+    const terminal = makeTerminal();
+
+    const result = await new RestoreManager(store, makeConfig('auto-confident')).autoRestoreMany([terminal], '/work/a');
+
+    expect(result).toEqual({
+      restored: 0,
+      skipped: [
+        'auto-restore skipped because no eligible records matched workspace scope',
+        'auto-restore skipped for unnamed terminal because no eligible record matched terminal cwd/title within workspace scope'
+      ]
+    });
+    expect(terminal.commands).toEqual([]);
   });
 
   test('test_get_restore_terminal_name_expected_uses_saved_title', () => {
@@ -156,6 +179,18 @@ describe('RestoreManager', () => {
     expect(selectAutoRestorePairs([oldMatchingRecord, newOtherRecord], [target])).toEqual([{ target, record: oldMatchingRecord }]);
   });
 
+  test('test_select_auto_restore_pairs_ambiguous_ordinary_terminal_expected_does_not_receive_fallback_record', () => {
+    'Обычная неактивная вкладка без совпадающего названия и cwd не получает запасную запись при неоднозначности.';
+    const matchingRecord = { ...makeRecord('/tmp/a.jsonl', 10_000, '/work/a'), terminalName: 'Pi test 1' };
+    const fallbackRecord = { ...makeRecord('/tmp/b.jsonl', 12_000, '/work/a'), terminalName: 'Pi test 2' };
+    const piTarget = { terminal: makeTerminal(), title: 'Pi test 1' };
+    const ordinaryTarget = { terminal: makeTerminal(), title: 'bash' };
+
+    expect(selectAutoRestorePairs([matchingRecord, fallbackRecord], [piTarget, ordinaryTarget], '/work/a')).toEqual([
+      { target: piTarget, record: matchingRecord }
+    ]);
+  });
+
   test('test_select_auto_restore_pairs_expected_restored_terminal_title_overrides_closed_marker', () => {
     'Если VS Code восстановил вкладку с тем же title, closed marker считается shutdown-шумом.';
     const closedButVisibleRecord = { ...makeRecord('/tmp/a.jsonl', 10_000, '/work/a'), terminalName: 'Pi test 1', terminalClosedAt: 12_000 };
@@ -225,8 +260,8 @@ describe('RestoreManager', () => {
     const secondTerminal = makeTerminal();
 
     const results = await Promise.all([
-      new RestoreManager(firstStore, makeConfig('auto-confident')).autoRestoreTargets([{ terminal: firstTerminal }], scopeCwd),
-      new RestoreManager(secondStore, makeConfig('auto-confident')).autoRestoreTargets([{ terminal: secondTerminal }], scopeCwd)
+      new RestoreManager(firstStore, makeConfig('auto-confident')).autoRestoreTargets([{ terminal: firstTerminal, cwd: scopeCwd }], scopeCwd),
+      new RestoreManager(secondStore, makeConfig('auto-confident')).autoRestoreTargets([{ terminal: secondTerminal, cwd: scopeCwd }], scopeCwd)
     ]);
 
     expect(results.map((result) => result.restored).sort()).toEqual([0, 1]);
@@ -234,8 +269,8 @@ describe('RestoreManager', () => {
     expect((await writerStore.latest(scopeCwd))?.restoreAttempts).toBe(1);
   });
 
-  test('test_auto_restore_scope_expected_uses_matching_workspace_record', async () => {
-    'Auto-restore выбирает запись только из совпавшего workspace scope.';
+  test('test_auto_restore_scope_without_terminal_evidence_expected_skips_matching_workspace_record', async () => {
+    'Auto-restore не использует workspace scope как единственный сигнал для обычной неактивной вкладки.';
     const sessionPathA = path.join(tempDir, 'a.jsonl');
     const sessionPathB = path.join(tempDir, 'b.jsonl');
     await writeFile(sessionPathA, '{}\n', 'utf8');
@@ -247,8 +282,8 @@ describe('RestoreManager', () => {
 
     const reason = await new RestoreManager(store, makeConfig('auto-confident')).autoRestore(terminal, '/work/a');
 
-    expect(reason).toBe('high-confidence record is eligible for automatic restore');
-    expect(terminal.commands).toEqual([`pi --session '${sessionPathA}'`]);
+    expect(reason).toBe('auto-restore skipped because no eligible records matched workspace scope; auto-restore skipped for unnamed terminal because no eligible record matched terminal cwd/title within workspace scope');
+    expect(terminal.commands).toEqual([]);
   });
 
   test('test_auto_restore_targets_workspace_scope_expected_matches_each_terminal_cwd', async () => {

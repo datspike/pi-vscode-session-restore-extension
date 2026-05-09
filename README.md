@@ -48,7 +48,7 @@ The extension stores only local diagnostic events from the wrapper and Pi-side r
 
 - Does not restore a live terminal process.
 - Does not support tmux, Remote SSH, WSL, or Dev Containers.
-- Auto-restore is intentionally conservative: it works only with `restorePolicy=auto-confident`, high-confidence records, and a known workspace scope. If VS Code restores several idle terminal tabs in one workspace, the extension tries to restore the corresponding number of latest Pi records for that workspace.
-- Auto-restore uses only existing idle terminal tabs restored by VS Code itself. The extension does not create new terminal tabs on startup, to avoid racing VS Code terminal persistence and creating duplicates. If restored terminal tabs have saved titles, records are matched to tabs by title first, then by time as a fallback.
+- Auto-restore is intentionally conservative: it works only with `restorePolicy=auto-confident`, high-confidence records, and a known workspace scope. It restores into an existing idle terminal only when the terminal title matches a saved Pi record title or VS Code shell integration reports a compatible terminal cwd.
+- Auto-restore uses only existing idle terminal tabs restored by VS Code itself. The extension does not create new terminal tabs on startup, to avoid racing VS Code terminal persistence and creating duplicates. Ordinary idle terminals without a matching title or explicit cwd signal are skipped instead of receiving a time-based fallback record.
 - Terminal tab names are best-effort: the VS Code API allows reading `Terminal.name`, but does not publicly expose renaming for existing shell-backed terminals.
 - VS Code shell integration can be unavailable; in that case the extension uses the wrapper/Pi event log and the fallback `terminal.sendText` path for manual restore commands.

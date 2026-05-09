@@ -77,12 +77,12 @@ export function selectAutoRestorePairs(
 }
 
 function isFallbackRestorableRecordForTarget(record: RestoreRecord, target: AutoRestoreTarget): boolean {
-  if (isAutoRestorableRecord(record)) {
-    return true;
-  }
   const recordTitle = normalizeTitle(record.terminalName);
   const targetTitle = normalizeTitle(target.title);
-  return record.confidence === 'high' && recordTitle !== undefined && recordTitle === targetTitle;
+  if (record.confidence === 'high' && recordTitle !== undefined && recordTitle === targetTitle) {
+    return true;
+  }
+  return target.cwd !== undefined && isAutoRestorableRecord(record);
 }
 
 function isRecordCompatibleWithTarget(record: RestoreRecord, target: AutoRestoreTarget, scopeCwd: string | undefined): boolean {
@@ -165,16 +165,11 @@ export class RestoreManager {
   }
 
   public async autoRestore(terminal: vscode.Terminal, scopeCwd?: string): Promise<string> {
-    if (scopeCwd === undefined) {
-      return 'auto-restore skipped because workspace scope is unknown';
+    const result = await this.autoRestoreTargets([{ terminal }], scopeCwd);
+    if (result.restored === 1) {
+      return 'high-confidence record is eligible for automatic restore';
     }
-    const record = (await this.getAutoRestoreRecords(scopeCwd, 1))[0];
-    const decision = await this.decide(record);
-    if (!record || decision.action !== 'auto') {
-      return decision.reason;
-    }
-    const restored = await this.executeRestore(terminal, record);
-    return restored ? decision.reason : 'restore was attempted recently for this record';
+    return result.skipped.join('; ');
   }
 
   public async autoRestoreMany(terminals: readonly vscode.Terminal[], scopeCwd?: string): Promise<AutoRestoreManyResult> {
