@@ -89,12 +89,33 @@ export function deactivate(): void {
   // extension resources are disposed through VS Code subscriptions
 }
 
-function getWorkspaceScopeCwd(): string | undefined {
+export function getWorkspaceScopeCwd(): string | undefined {
   const activeCwd = vscode.window.activeTerminal?.shellIntegration?.cwd?.fsPath;
   if (activeCwd !== undefined) {
     return vscode.workspace.getWorkspaceFolder(vscode.Uri.file(activeCwd))?.uri.fsPath ?? activeCwd;
   }
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+}
+
+const AUTO_RESTORE_STARTUP_DELAY_MS = 3_000;
+const AUTO_RESTORE_CWD_RETRY_DELAYS_MS = [0, 500, 1_000, 2_000] as const;
+const AUTO_RESTORE_IDLE_RETRY_DELAYS_MS = [0, 1_000, 2_000, 3_000] as const;
+
+async function waitForAutoRestoreScopeCwd(logger: Logger): Promise<string | undefined> {
+  if (vscode.window.activeTerminal === undefined) {
+    return getWorkspaceScopeCwd();
+  }
+  for (const delayMs of AUTO_RESTORE_CWD_RETRY_DELAYS_MS) {
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+    const activeCwd = vscode.window.activeTerminal?.shellIntegration?.cwd?.fsPath;
+    if (activeCwd !== undefined) {
+      return vscode.workspace.getWorkspaceFolder(vscode.Uri.file(activeCwd))?.uri.fsPath ?? activeCwd;
+    }
+  }
+  logger.info('Auto-restore skipped because active terminal cwd is not ready.');
+  return undefined;
 }
 
 async function confirmRestore(record: RestoreRecord): Promise<boolean> {
@@ -116,7 +137,7 @@ function scheduleConservativeAutoRestore(
     void runConservativeAutoRestore(store, getConfig, logger).catch((error: unknown) => {
       logger.error(error instanceof Error ? error.message : String(error));
     });
-  }, 3_000);
+  }, AUTO_RESTORE_STARTUP_DELAY_MS);
 }
 
 async function runConservativeAutoRestore(
@@ -129,7 +150,7 @@ async function runConservativeAutoRestore(
     return;
   }
 
-  const scopeCwd = getWorkspaceScopeCwd();
+  const scopeCwd = await waitForAutoRestoreScopeCwd(logger);
   if (scopeCwd === undefined) {
     logger.info('Auto-restore skipped because workspace scope is unknown.');
     return;
@@ -143,14 +164,11 @@ async function runConservativeAutoRestore(
     return;
   }
 
-  const restoreTargets = idleTerminals.map((terminal): AutoRestoreTarget => {
-    const target: AutoRestoreTarget = { terminal, title: getTerminalTitleSnapshot(terminal) };
-    const cwd = terminal.shellIntegration?.cwd?.fsPath;
-    if (cwd !== undefined) {
-      target.cwd = cwd;
-    }
-    return target;
-  });
+  const restoreTargets = await getStableAutoRestoreTargets(idleTerminals, logger);
+  if (restoreTargets.length === 0) {
+    logger.info('Auto-restore skipped because terminal cwd is not ready.');
+    return;
+  }
   const eligibleRecords = await manager.getAutoRestoreRecords(scopeCwd, idleTerminals.length);
   logger.debug(`Auto-restore candidates: idle=${idleTerminals.length}, targets=${restoreTargets.map((target) => target.title ?? 'unnamed').join(', ')}, records=${eligibleRecords.map(describeRecordForLog).join(' | ')}`);
   const result = await manager.autoRestoreTargets(restoreTargets, scopeCwd);
@@ -205,8 +223,7 @@ function describeRecordForLog(record: RestoreRecord): string {
 }
 
 async function waitForIdleTerminals(logger: Logger): Promise<vscode.Terminal[]> {
-  const retryDelaysMs = [0, 1_000, 2_000, 3_000];
-  for (const delayMs of retryDelaysMs) {
+  for (const delayMs of AUTO_RESTORE_IDLE_RETRY_DELAYS_MS) {
     if (delayMs > 0) {
       await sleep(delayMs);
     }
@@ -216,6 +233,36 @@ async function waitForIdleTerminals(logger: Logger): Promise<vscode.Terminal[]> 
     }
   }
   return [];
+}
+
+async function getStableAutoRestoreTargets(terminals: readonly vscode.Terminal[], logger: Logger): Promise<AutoRestoreTarget[]> {
+  for (const delayMs of AUTO_RESTORE_CWD_RETRY_DELAYS_MS) {
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+    const targets = createAutoRestoreTargets(terminals);
+    if (targets.length === terminals.length) {
+      return targets;
+    }
+  }
+  const targets = createAutoRestoreTargets(terminals);
+  const skippedCount = terminals.length - targets.length;
+  if (skippedCount > 0) {
+    logger.info(`Auto-restore skipped ${skippedCount} terminal(s) because shell integration cwd is not ready.`);
+  }
+  return targets;
+}
+
+function createAutoRestoreTargets(terminals: readonly vscode.Terminal[]): AutoRestoreTarget[] {
+  const targets: AutoRestoreTarget[] = [];
+  for (const terminal of terminals) {
+    const cwd = terminal.shellIntegration?.cwd?.fsPath;
+    if (cwd === undefined) {
+      continue;
+    }
+    targets.push({ terminal, title: getTerminalTitleSnapshot(terminal), cwd });
+  }
+  return targets;
 }
 
 function createRestoreTerminal(record: RestoreRecord | undefined): vscode.Terminal {
@@ -236,13 +283,14 @@ async function getIdleTerminals(terminals: readonly vscode.Terminal[], logger: L
   return idleTerminals;
 }
 
-async function terminalLooksIdle(terminal: vscode.Terminal, logger: Logger): Promise<boolean> {
+export async function terminalLooksIdle(terminal: vscode.Terminal, logger: Logger): Promise<boolean> {
   if (process.platform !== 'linux') {
     return true;
   }
   const shellPid = await terminal.processId;
   if (shellPid === undefined) {
-    return true;
+    logger.debug(`Terminal is not considered idle yet because shell pid is unknown: ${getTerminalTitleSnapshot(terminal)}`);
+    return false;
   }
   try {
     const procEntries = await readdir('/proc', { withFileTypes: true });
