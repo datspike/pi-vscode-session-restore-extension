@@ -56,6 +56,55 @@ afterEach(async () => {
 });
 
 describe('TerminalTracker lifecycle', () => {
+  test('test_pi_session_start_with_previous_session_file_expected_stores_new_record_and_closes_previous', async () => {
+    'Pi-side session_start создаёт новый active record и закрывает previous record одним authoritative событием.';
+    vi.spyOn(Date, 'now').mockReturnValue(30_000);
+    const previousSessionPath = path.join(tempDir, 'previous.jsonl');
+    const newSessionPath = path.join(tempDir, 'new.jsonl');
+    const terminal = makeTerminal('Active Pi', 123);
+    const store = new RecordStore(tempDir, () => 30_000);
+    const tracker = new TerminalTracker(store, () => makeConfig([]), makeLogger());
+    vscodeMock.terminals = [terminal];
+
+    await tracker.ingestEvents([{
+      event: 'pi-session-start',
+      time: 10_000,
+      cwd: tempDir,
+      pid: 456,
+      ppid: 123,
+      sessionPath: previousSessionPath,
+      reason: 'startup'
+    }]);
+    await tracker.ingestEvents([{
+      event: 'pi-session-start',
+      time: 25_000,
+      cwd: tempDir,
+      pid: 456,
+      ppid: 123,
+      sessionPath: newSessionPath,
+      reason: 'resume',
+      previousSessionFile: previousSessionPath
+    }]);
+
+    const records = (await store.read()).records;
+    expect(records).toHaveLength(2);
+    const newRecord = records.find((record) => record.sessionPath === newSessionPath);
+    const previousRecord = records.find((record) => record.sessionPath === previousSessionPath);
+    expect(newRecord).toMatchObject({
+      sessionPath: newSessionPath,
+      terminalName: 'Active Pi',
+      confidence: 'high',
+      score: 100,
+      reasons: ['pi extension reported session_start (resume)']
+    });
+    expect(newRecord!.terminalClosedAt).toBeUndefined();
+    expect(previousRecord).toMatchObject({
+      sessionPath: previousSessionPath,
+      terminalName: 'Active Pi',
+      terminalClosedAt: 25_000
+    });
+  });
+
   test('test_on_terminal_close_with_reused_shell_pid_expected_new_terminal_does_not_update_old_record', async () => {
     'Закрытие terminal очищает live-привязку shellPid и не даёт новому terminal с тем же pid обновить старый record.';
     vi.useFakeTimers({ now: 20_000 });
@@ -186,6 +235,40 @@ describe('TerminalTracker explicit wrapper session', () => {
     }]);
 
     expect((await store.read()).records).toEqual([]);
+  });
+
+  test('test_ingest_wrapper_event_with_resume_slash_and_existing_record_expected_keeps_previous_active_without_pi_side_event', async () => {
+    'Потерянное Pi-side событие не закрывает previous record на основании одной slash-команды.';
+    vi.spyOn(Date, 'now').mockReturnValue(20_000);
+    const previousSessionPath = path.join(tempDir, 'previous.jsonl');
+    const store = new RecordStore(tempDir, () => 20_000);
+    const tracker = new TerminalTracker(store, () => makeConfig([]), makeLogger());
+
+    await tracker.ingestEvents([{
+      event: 'pi-session-start',
+      time: 5_000,
+      cwd: path.join(tempDir, 'project'),
+      pid: 456,
+      ppid: 100,
+      sessionPath: previousSessionPath,
+      reason: 'startup'
+    }]);
+    await tracker.ingestWrapperEvents([{
+      event: 'pi-wrapper-invocation',
+      time: 10_000,
+      cwd: path.join(tempDir, 'project'),
+      argv: ['pi', '/resume'],
+      pid: 101,
+      ppid: 100
+    }]);
+
+    const records = (await store.read()).records;
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      sessionPath: previousSessionPath,
+      reasons: ['pi extension reported session_start (startup)']
+    });
+    expect(records[0]!.terminalClosedAt).toBeUndefined();
   });
 
   test('test_ingest_wrapper_event_with_foreign_explicit_session_expected_skips_direct_record', async () => {

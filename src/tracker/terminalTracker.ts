@@ -179,12 +179,12 @@ export class TerminalTracker implements vscode.Disposable {
     if (terminalName !== undefined) {
       record.terminalName = terminalName;
     }
+    this.applyClosedMarker(record, closedMarker);
+    await this.store.add(record, this.getConfig().recordTtlDays);
     if (event.previousSessionFile !== undefined && event.previousSessionFile !== event.sessionPath) {
       await this.store.markTerminalClosed(event.previousSessionFile, terminalName, event.time);
       this.logger.debug(`Marked previous Pi session as inactive after ${event.reason ?? 'session switch'}: ${event.previousSessionFile}`);
     }
-    this.applyClosedMarker(record, closedMarker);
-    await this.store.add(record, this.getConfig().recordTtlDays);
     this.logger.info('Stored authoritative Pi session record from Pi extension.');
   }
 
