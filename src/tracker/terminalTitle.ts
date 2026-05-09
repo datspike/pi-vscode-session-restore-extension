@@ -10,15 +10,14 @@ export function chooseTerminalTitle(terminalName: string, editorTabLabel: string
 }
 
 function getTerminalEditorLabelByIndex(terminal: vscode.Terminal): string | undefined {
-  const terminalIndex = vscode.window.terminals.indexOf(terminal);
-  if (terminalIndex < 0) {
+  if (vscode.window.terminals.length !== 1 || vscode.window.terminals[0] !== terminal) {
     return undefined;
   }
   const labels = getTerminalEditorTabLabels();
-  if (labels.length !== vscode.window.terminals.length) {
+  if (labels.length !== 1) {
     return undefined;
   }
-  return labels[terminalIndex];
+  return labels[0];
 }
 
 function getTerminalEditorTabLabels(): string[] {
