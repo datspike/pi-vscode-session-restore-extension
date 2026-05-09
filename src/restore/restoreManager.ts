@@ -169,7 +169,8 @@ export class RestoreManager {
     if (!record || decision.action === 'skip') {
       return decision.reason;
     }
-    if (decision.action === 'prompt') {
+    const requiresUnknownScopeConfirmation = scopeCwd === undefined && decision.action === 'auto';
+    if (decision.action === 'prompt' || requiresUnknownScopeConfirmation) {
       if (!confirm) {
         return 'restore requires confirmation';
       }

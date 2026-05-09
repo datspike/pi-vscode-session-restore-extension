@@ -46,6 +46,47 @@ describe('RestoreManager', () => {
     expect(terminal.commands).toEqual([]);
   });
 
+  test('test_restore_last_without_scope_expected_prompts_before_global_latest_restore', async () => {
+    'Restore Last при неизвестном scope не восстанавливает global latest без подтверждения.';
+    const workspaceSessionPath = path.join(tempDir, 'workspace.jsonl');
+    const otherSessionPath = path.join(tempDir, 'other.jsonl');
+    await writeFile(workspaceSessionPath, '{}\n', 'utf8');
+    await writeFile(otherSessionPath, '{}\n', 'utf8');
+    const store = new RecordStore(tempDir, () => 20_000);
+    await store.add(makeRecord(workspaceSessionPath, 10_000, '/work/a'), 30);
+    await store.add(makeRecord(otherSessionPath, 11_000, '/other/project'), 30);
+    const terminal = makeTerminal();
+    const promptedRecords: RestoreRecord[] = [];
+
+    const reason = await new RestoreManager(store, makeConfig('auto-confident')).restoreLast(terminal, undefined, async (record) => {
+      promptedRecords.push(record);
+      return false;
+    });
+
+    expect(reason).toBe('restore cancelled by user');
+    expect(promptedRecords.map((record) => ({ cwd: record.cwd, sessionPath: record.sessionPath }))).toEqual([
+      { cwd: '/other/project', sessionPath: otherSessionPath }
+    ]);
+    expect(terminal.commands).toEqual([]);
+  });
+
+  test('test_restore_last_workspace_scope_expected_ignores_newer_record_from_other_project', async () => {
+    'Restore Last с workspace scope выбирает последнюю запись текущего проекта.';
+    const workspaceSessionPath = path.join(tempDir, 'workspace.jsonl');
+    const otherSessionPath = path.join(tempDir, 'other.jsonl');
+    await writeFile(workspaceSessionPath, '{}\n', 'utf8');
+    await writeFile(otherSessionPath, '{}\n', 'utf8');
+    const store = new RecordStore(tempDir, () => 20_000);
+    await store.add(makeRecord(workspaceSessionPath, 10_000, '/work/a'), 30);
+    await store.add(makeRecord(otherSessionPath, 11_000, '/other/project'), 30);
+    const terminal = makeTerminal();
+
+    const reason = await new RestoreManager(store, makeConfig('auto-confident')).restoreLast(terminal, '/work/a');
+
+    expect(reason).toBe('high-confidence record is eligible for automatic restore');
+    expect(terminal.commands).toEqual([`pi --session '${workspaceSessionPath}'`]);
+  });
+
   test('test_auto_restore_targets_explicit_cwd_expected_restores_two_sessions_in_two_terminals', async () => {
     'Auto-restore восстанавливает Pi-сессии во вкладки с явным cwd-сигналом.';
     const sessionPathA = path.join(tempDir, 'a.jsonl');
