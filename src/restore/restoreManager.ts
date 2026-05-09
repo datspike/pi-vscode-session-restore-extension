@@ -10,6 +10,7 @@ export type TerminalRenamer = (terminal: vscode.Terminal, name: string) => Promi
 export interface AutoRestoreTarget {
   terminal: vscode.Terminal;
   title?: string;
+  cwd?: string;
 }
 
 export interface AutoRestorePair {
@@ -31,7 +32,11 @@ export function isAutoRestorableRecord(record: RestoreRecord): boolean {
   return record.confidence === 'high' && record.terminalClosedAt === undefined;
 }
 
-export function selectAutoRestorePairs(records: readonly RestoreRecord[], targets: readonly AutoRestoreTarget[]): AutoRestorePair[] {
+export function selectAutoRestorePairs(
+  records: readonly RestoreRecord[],
+  targets: readonly AutoRestoreTarget[],
+  scopeCwd?: string
+): AutoRestorePair[] {
   const titleMatchRecords = records
     .filter((record) => record.confidence === 'high')
     .sort((left, right) => left.startedAt - right.startedAt);
@@ -44,7 +49,7 @@ export function selectAutoRestorePairs(records: readonly RestoreRecord[], target
     if (title === undefined || targetTitleCounts.get(title) !== 1) {
       continue;
     }
-    const record = findNewestUnusedMatchingTitle(titleMatchRecords, usedRecordIds, title);
+    const record = findNewestUnusedMatchingTitle(titleMatchRecords, usedRecordIds, title, target, scopeCwd);
     if (record === undefined) {
       continue;
     }
@@ -60,7 +65,7 @@ export function selectAutoRestorePairs(records: readonly RestoreRecord[], target
     }
     const remainingTargetCount = unmatchedTargets.length - index;
     const compatibleRecords = titleMatchRecords
-      .filter((record) => !usedRecordIds.has(record.id) && isFallbackRestorableRecordForTarget(record, target));
+      .filter((record) => !usedRecordIds.has(record.id) && isRecordCompatibleWithTarget(record, target, scopeCwd) && isFallbackRestorableRecordForTarget(record, target));
     const record = compatibleRecords.slice(-remainingTargetCount)[0];
     if (record !== undefined) {
       usedRecordIds.add(record.id);
@@ -80,6 +85,16 @@ function isFallbackRestorableRecordForTarget(record: RestoreRecord, target: Auto
   return record.confidence === 'high' && recordTitle !== undefined && recordTitle === targetTitle;
 }
 
+function isRecordCompatibleWithTarget(record: RestoreRecord, target: AutoRestoreTarget, scopeCwd: string | undefined): boolean {
+  if (target.cwd !== undefined) {
+    return record.cwd === target.cwd;
+  }
+  if (scopeCwd !== undefined) {
+    return record.cwd === scopeCwd;
+  }
+  return true;
+}
+
 function countTargetTitles(targets: readonly AutoRestoreTarget[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const target of targets) {
@@ -91,13 +106,19 @@ function countTargetTitles(targets: readonly AutoRestoreTarget[]): Map<string, n
   return counts;
 }
 
-function findNewestUnusedMatchingTitle(records: readonly RestoreRecord[], usedRecordIds: Set<string>, title: string): RestoreRecord | undefined {
+function findNewestUnusedMatchingTitle(
+  records: readonly RestoreRecord[],
+  usedRecordIds: Set<string>,
+  title: string,
+  target: AutoRestoreTarget,
+  scopeCwd: string | undefined
+): RestoreRecord | undefined {
   for (let index = records.length - 1; index >= 0; index -= 1) {
     const record = records[index];
     if (record === undefined || usedRecordIds.has(record.id)) {
       continue;
     }
-    if (normalizeTitle(record.terminalName) === title) {
+    if (isRecordCompatibleWithTarget(record, target, scopeCwd) && normalizeTitle(record.terminalName) === title) {
       return record;
     }
   }
@@ -107,6 +128,12 @@ function findNewestUnusedMatchingTitle(records: readonly RestoreRecord[], usedRe
 function normalizeTitle(title: string | undefined): string | undefined {
   const normalized = title?.trim().toLocaleLowerCase();
   return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function describeTarget(target: AutoRestoreTarget): string {
+  const title = target.title?.trim();
+  const label = title && title.length > 0 ? title : 'unnamed terminal';
+  return target.cwd === undefined ? label : `${label} (${target.cwd})`;
 }
 
 export class RestoreManager {
@@ -162,8 +189,10 @@ export class RestoreManager {
       return { restored: 0, skipped: ['auto-restore skipped because no terminals exist'] };
     }
 
-    const records = await this.store.listForScope(scopeCwd);
-    const pairs = selectAutoRestorePairs(records, targets);
+    const records = targets.some((target) => target.cwd !== undefined)
+      ? await this.store.listForWorkspaceScope(scopeCwd)
+      : await this.store.listForScope(scopeCwd);
+    const pairs = selectAutoRestorePairs(records, targets, scopeCwd);
     const skipped: string[] = [];
     let restored = 0;
     for (const pair of pairs) {
@@ -179,8 +208,12 @@ export class RestoreManager {
       }
       restored += 1;
     }
+    const unmatchedTargets = targets.filter((target) => !pairs.some((pair) => pair.target === target));
     if (pairs.length === 0) {
       skipped.push('auto-restore skipped because no eligible records matched workspace scope');
+    }
+    for (const target of unmatchedTargets) {
+      skipped.push(`auto-restore skipped for ${describeTarget(target)} because no eligible record matched terminal cwd/title within workspace scope`);
     }
     return { restored, skipped };
   }
@@ -205,7 +238,7 @@ export class RestoreManager {
   }
 
   public async getAutoRestoreRecords(scopeCwd: string, terminalCount: number): Promise<RestoreRecord[]> {
-    const records = await this.store.listForScope(scopeCwd);
+    const records = await this.store.listForWorkspaceScope(scopeCwd);
     return records
       .filter(isAutoRestorableRecord)
       .sort((left, right) => left.startedAt - right.startedAt)

@@ -250,6 +250,56 @@ describe('RestoreManager', () => {
     expect(reason).toBe('high-confidence record is eligible for automatic restore');
     expect(terminal.commands).toEqual([`pi --session '${sessionPathA}'`]);
   });
+
+  test('test_auto_restore_targets_workspace_scope_expected_matches_each_terminal_cwd', async () => {
+    'Auto-restore в одном workspace сопоставляет записи из подпапок с точным cwd каждой вкладки.';
+    const sessionPathApi = path.join(tempDir, 'api.jsonl');
+    const sessionPathWeb = path.join(tempDir, 'web.jsonl');
+    const otherSessionPath = path.join(tempDir, 'other.jsonl');
+    await writeFile(sessionPathApi, '{}\n', 'utf8');
+    await writeFile(sessionPathWeb, '{}\n', 'utf8');
+    await writeFile(otherSessionPath, '{}\n', 'utf8');
+    const store = new RecordStore(tempDir, () => 20_000);
+    await store.add(makeRecord(sessionPathApi, 10_000, '/repo/api'), 30);
+    await store.add(makeRecord(sessionPathWeb, 11_000, '/repo/web'), 30);
+    await store.add(makeRecord(otherSessionPath, 12_000, '/other/project'), 30);
+    const apiTerminal = makeTerminal();
+    const webTerminal = makeTerminal();
+
+    const result = await new RestoreManager(store, makeConfig('auto-confident')).autoRestoreTargets([
+      { terminal: apiTerminal, cwd: '/repo/api' },
+      { terminal: webTerminal, cwd: '/repo/web' }
+    ], '/repo');
+
+    expect(result).toEqual({ restored: 2, skipped: [] });
+    expect(apiTerminal.commands).toEqual([`pi --session '${sessionPathApi}'`]);
+    expect(webTerminal.commands).toEqual([`pi --session '${sessionPathWeb}'`]);
+  });
+
+  test('test_auto_restore_targets_narrow_scope_expected_skips_terminal_outside_scope', async () => {
+    'Auto-restore не берёт запись из соседней подпапки, если global scope сужен до другой подпапки.';
+    const sessionPathApi = path.join(tempDir, 'api.jsonl');
+    const sessionPathWeb = path.join(tempDir, 'web.jsonl');
+    await writeFile(sessionPathApi, '{}\n', 'utf8');
+    await writeFile(sessionPathWeb, '{}\n', 'utf8');
+    const store = new RecordStore(tempDir, () => 20_000);
+    await store.add(makeRecord(sessionPathApi, 10_000, '/repo/api'), 30);
+    await store.add(makeRecord(sessionPathWeb, 11_000, '/repo/web'), 30);
+    const apiTerminal = makeTerminal();
+    const webTerminal = makeTerminal();
+
+    const result = await new RestoreManager(store, makeConfig('auto-confident')).autoRestoreTargets([
+      { terminal: apiTerminal, cwd: '/repo/api' },
+      { terminal: webTerminal, cwd: '/repo/web' }
+    ], '/repo/api');
+
+    expect(result.restored).toBe(1);
+    expect(result.skipped).toEqual([
+      'auto-restore skipped for unnamed terminal (/repo/web) because no eligible record matched terminal cwd/title within workspace scope'
+    ]);
+    expect(apiTerminal.commands).toEqual([`pi --session '${sessionPathApi}'`]);
+    expect(webTerminal.commands).toEqual([]);
+  });
 });
 
 interface FakeTerminal extends vscode.Terminal {

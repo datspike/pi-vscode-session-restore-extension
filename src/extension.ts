@@ -90,8 +90,11 @@ export function deactivate(): void {
 }
 
 function getWorkspaceScopeCwd(): string | undefined {
-  return vscode.window.activeTerminal?.shellIntegration?.cwd?.fsPath
-    ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const activeCwd = vscode.window.activeTerminal?.shellIntegration?.cwd?.fsPath;
+  if (activeCwd !== undefined) {
+    return vscode.workspace.getWorkspaceFolder(vscode.Uri.file(activeCwd))?.uri.fsPath ?? activeCwd;
+  }
+  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
 
 async function confirmRestore(record: RestoreRecord): Promise<boolean> {
@@ -140,7 +143,14 @@ async function runConservativeAutoRestore(
     return;
   }
 
-  const restoreTargets = idleTerminals.map((terminal): AutoRestoreTarget => ({ terminal, title: getTerminalTitleSnapshot(terminal) }));
+  const restoreTargets = idleTerminals.map((terminal): AutoRestoreTarget => {
+    const target: AutoRestoreTarget = { terminal, title: getTerminalTitleSnapshot(terminal) };
+    const cwd = terminal.shellIntegration?.cwd?.fsPath;
+    if (cwd !== undefined) {
+      target.cwd = cwd;
+    }
+    return target;
+  });
   const eligibleRecords = await manager.getAutoRestoreRecords(scopeCwd, idleTerminals.length);
   logger.debug(`Auto-restore candidates: idle=${idleTerminals.length}, targets=${restoreTargets.map((target) => target.title ?? 'unnamed').join(', ')}, records=${eligibleRecords.map(describeRecordForLog).join(' | ')}`);
   const result = await manager.autoRestoreTargets(restoreTargets, scopeCwd);

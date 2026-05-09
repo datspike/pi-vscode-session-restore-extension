@@ -126,7 +126,12 @@ export class RecordStore {
     const scopedRecords = scopeCwd === undefined
       ? data.records
       : data.records.filter((record) => record.cwd === scopeCwd);
-    return [...scopedRecords].sort((left: RestoreRecord, right: RestoreRecord) => right.matchedAt - left.matchedAt);
+    return sortNewestFirst(scopedRecords);
+  }
+
+  public async listForWorkspaceScope(scopeCwd: string): Promise<RestoreRecord[]> {
+    const data = await this.read();
+    return sortNewestFirst(data.records.filter((record) => isCwdInScope(record.cwd, scopeCwd)));
   }
 
   private async writeRecords(records: RestoreRecord[]): Promise<void> {
@@ -185,6 +190,14 @@ export function pruneRecords(records: RestoreRecord[], ttlDays: number, now: num
   return records.filter((record) => now - record.matchedAt <= ttlMs);
 }
 
+export function isCwdInScope(recordCwd: string | undefined, scopeCwd: string): boolean {
+  if (recordCwd === undefined) {
+    return false;
+  }
+  const relativePath = path.relative(path.resolve(scopeCwd), path.resolve(recordCwd));
+  return relativePath === '' || (relativePath.length > 0 && !relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+}
+
 export function mergeRestoreRecord(incoming: RestoreRecord, existing: RestoreRecord): RestoreRecord {
   const merged: RestoreRecord = {
     ...existing,
@@ -211,6 +224,10 @@ export function mergeRestoreRecord(incoming: RestoreRecord, existing: RestoreRec
 
 function emptyStore(): RecordStoreData {
   return { schemaVersion: SCHEMA_VERSION, records: [] };
+}
+
+function sortNewestFirst(records: RestoreRecord[]): RestoreRecord[] {
+  return [...records].sort((left: RestoreRecord, right: RestoreRecord) => right.matchedAt - left.matchedAt);
 }
 
 function delay(ms: number): Promise<void> {

@@ -159,6 +159,20 @@ describe('RecordStore', () => {
     expect(await store.latest('/work/missing')).toBeUndefined();
   });
 
+  test('test_list_for_workspace_scope_expected_includes_only_descendant_cwds', async () => {
+    'Workspace scope включает подпапки проекта, но не соседние проекты с похожим префиксом.';
+    const store = new RecordStore(tempDir, () => 20_000);
+    const apiRecord = { ...makeRecord('/tmp/api.jsonl', 10_000), cwd: '/repo/api' };
+    const webRecord = { ...makeRecord('/tmp/web.jsonl', 11_000), cwd: '/repo/web' };
+    const prefixRecord = { ...makeRecord('/tmp/prefix.jsonl', 12_000), cwd: '/repo-other' };
+
+    await store.add(apiRecord, 30);
+    await store.add(webRecord, 30);
+    await store.add(prefixRecord, 30);
+
+    expect(await store.listForWorkspaceScope('/repo')).toEqual([webRecord, apiRecord]);
+  });
+
   test('test_corrupt_store_expected_empty_store', async () => {
     'Повреждённый JSON восстанавливается как пустое хранилище.';
     await writeFile(path.join(tempDir, 'records.json'), '{bad', 'utf8');
