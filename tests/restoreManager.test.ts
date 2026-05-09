@@ -250,13 +250,26 @@ describe('RestoreManager', () => {
   });
 
   test('test_select_auto_restore_pairs_duplicate_titles_ambiguous_order_expected_skips_fallback', () => {
-    'Одинаковые titles без устойчивого сигнала не раскладываются по порядку вкладок.';
+    'Одинаковые titles без cwd-сигнала не раскладываются по порядку вкладок.';
     const oldRecord = { ...makeRecord('/tmp/old.jsonl', 10_000, '/work/a'), terminalName: 'pi' };
     const newRecord = { ...makeRecord('/tmp/new.jsonl', 12_000, '/work/a'), terminalName: 'pi' };
     const firstTarget = { terminal: makeTerminal(), title: 'pi' };
     const secondTarget = { terminal: makeTerminal(), title: 'pi' };
 
     expect(selectAutoRestorePairs([oldRecord, newRecord], [firstTarget, secondTarget])).toEqual([]);
+  });
+
+  test('test_select_auto_restore_pairs_duplicate_titles_with_cwd_expected_uses_cwd_fallback_order', () => {
+    'Одинаковые shell titles с cwd-сигналом восстанавливаются по порядку вкладок внутри проекта.';
+    const oldRecord = { ...makeRecord('/tmp/old.jsonl', 10_000, '/work/a'), terminalName: 'Pi work' };
+    const newRecord = { ...makeRecord('/tmp/new.jsonl', 12_000, '/work/a'), terminalName: 'Pi test 2' };
+    const firstTarget = { terminal: makeTerminal(), title: 'bash', cwd: '/work/a' };
+    const secondTarget = { terminal: makeTerminal(), title: 'bash', cwd: '/work/a' };
+
+    expect(selectAutoRestorePairs([oldRecord, newRecord], [firstTarget, secondTarget], '/work/a')).toEqual([
+      { target: firstTarget, record: oldRecord },
+      { target: secondTarget, record: newRecord }
+    ]);
   });
 
   test('test_select_auto_restore_pairs_duplicate_titles_closed_markers_expected_skip_ambiguous_fallback', () => {

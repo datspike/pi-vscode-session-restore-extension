@@ -82,13 +82,8 @@ function getAmbiguousFallbackTargets(targets: readonly AutoRestoreTarget[]): Set
   const targetTitleCounts = countTargetTitles(targets);
   for (const target of targets) {
     const title = normalizeTitle(target.title);
-    if (title !== undefined && targetTitleCounts.get(title) !== 1) {
-      const sameTitleTargets = targets.filter((candidate) => normalizeTitle(candidate.title) === title);
-      const cwd = target.cwd;
-      const hasUniqueCwdSignal = cwd !== undefined && sameTitleTargets.filter((candidate) => candidate.cwd === cwd).length === 1;
-      if (!hasUniqueCwdSignal) {
-        ambiguousTargets.add(target);
-      }
+    if (title !== undefined && targetTitleCounts.get(title) !== 1 && target.cwd === undefined) {
+      ambiguousTargets.add(target);
     }
   }
   return ambiguousTargets;
