@@ -161,14 +161,34 @@ function createRestoreManager(store: RecordStore, config: ExtensionConfig, logge
   return new RestoreManager(store, config, createTerminalRenamer(logger));
 }
 
-function createTerminalRenamer(logger: Logger): TerminalRenamer {
-  return async (_terminal, name) => {
+const TERMINAL_RENAME_ACTIVE_WAIT_DELAYS_MS = [0, 25, 50, 100] as const;
+
+export function createTerminalRenamer(logger: Logger): TerminalRenamer {
+  return async (terminal, name) => {
+    terminal.show(false);
+    const targetIsActive = await waitForActiveTerminal(terminal);
+    if (!targetIsActive) {
+      logger.debug(`Terminal rename skipped because target terminal did not become active: ${name}`);
+      return;
+    }
     await vscode.commands.executeCommand('workbench.action.terminal.renameWithArg', { name }).then(() => {
       logger.debug(`Terminal rename command applied: ${name}`);
     }, (error: unknown) => {
       logger.debug(`Terminal rename command failed: ${error instanceof Error ? error.message : String(error)}`);
     });
   };
+}
+
+async function waitForActiveTerminal(terminal: vscode.Terminal): Promise<boolean> {
+  for (const delayMs of TERMINAL_RENAME_ACTIVE_WAIT_DELAYS_MS) {
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+    if (vscode.window.activeTerminal === terminal) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function describeTerminals(terminals: readonly vscode.Terminal[]): Promise<string> {
