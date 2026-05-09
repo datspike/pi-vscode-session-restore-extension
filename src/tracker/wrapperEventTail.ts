@@ -27,8 +27,13 @@ export class WrapperEventTail {
       const length = fileStat.size - this.offset;
       const buffer = Buffer.alloc(length);
       await handle.read(buffer, 0, length, this.offset);
-      this.offset = fileStat.size;
-      const events = parseTrackerEvents(buffer.toString('utf8'));
+      const completeLength = buffer.lastIndexOf('\n') + 1;
+      if (completeLength === 0) {
+        return [];
+      }
+
+      this.offset += completeLength;
+      const events = parseTrackerEvents(buffer.subarray(0, completeLength).toString('utf8'));
       if (!this.firstReadPending) {
         return events;
       }
