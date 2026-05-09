@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -218,6 +218,43 @@ describe('TerminalTracker explicit wrapper session', () => {
       score: 100,
       reasons: ['wrapper reported explicit Pi session path']
     });
+  });
+
+  test('test_ingest_wrapper_event_with_explicit_session_expected_does_not_copy_session_jsonl_content', async () => {
+    'Содержимое session JSONL после metadata не попадает в RestoreRecord, records.json и диагностику wrapper-derived record.';
+    const cwd = path.join(tempDir, 'project');
+    const sessionPath = path.join(tempDir, 'session.jsonl');
+    const secretMarker = 'PI_SESSION_RESTORE_SECRET_MARKER_P3_15_DO_NOT_COPY';
+    await writeFile(sessionPath, [
+      JSON.stringify({ cwd, id: 'session-a' }),
+      JSON.stringify({ type: 'message', message: `private message ${secretMarker}` }),
+      JSON.stringify({ type: 'content', content: `private content ${secretMarker}` })
+    ].join('\n') + '\n', 'utf8');
+    const messages: string[] = [];
+    const store = new RecordStore(tempDir, () => 20_000);
+    const tracker = new TerminalTracker(store, () => makeConfig([]), makeLogger(messages));
+
+    await tracker.ingestWrapperEvents([{
+      event: 'pi-wrapper-invocation',
+      time: 10_000,
+      cwd,
+      argv: ['pi', '--session', sessionPath],
+      pid: 101,
+      ppid: 100
+    }]);
+
+    const records = (await store.read()).records;
+    const recordsJson = await readFile(path.join(tempDir, 'records.json'), 'utf8');
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      sessionPath,
+      cwd,
+      args: ['--session', sessionPath],
+      reasons: ['wrapper reported explicit Pi session path']
+    });
+    expect(JSON.stringify(records[0])).not.toContain(secretMarker);
+    expect(recordsJson).not.toContain(secretMarker);
+    expect(messages.join('\n')).not.toContain(secretMarker);
   });
 
   test('test_ingest_wrapper_event_with_resume_slash_expected_does_not_store_direct_record_without_pi_side_event', async () => {
