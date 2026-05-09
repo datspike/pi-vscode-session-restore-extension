@@ -1,5 +1,18 @@
-import { describe, expect, test } from 'vitest';
-import { parseTrackerEvents, parseWrapperEvents } from '../src/tracker/wrapperEventTail.js';
+import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { parseTrackerEvents, parseWrapperEvents, WrapperEventTail } from '../src/tracker/wrapperEventTail.js';
+
+let tempDir: string;
+
+beforeEach(async () => {
+  tempDir = await mkdtemp(path.join(os.tmpdir(), 'pi-wrapper-tail-'));
+});
+
+afterEach(async () => {
+  await rm(tempDir, { recursive: true, force: true });
+});
 
 describe('wrapperEventTail', () => {
   test('test_parse_tracker_events_expected_accepts_pi_session_start', () => {
@@ -37,5 +50,42 @@ describe('wrapperEventTail', () => {
     'Старое имя parser остаётся совместимым с wrapper events.';
     const raw = JSON.stringify({ event: 'pi-wrapper-invocation', time: 1_000, cwd: '/work/a', argv: ['pi'], pid: 11, ppid: 10 });
     expect(parseWrapperEvents(raw)).toEqual([{ event: 'pi-wrapper-invocation', time: 1_000, cwd: '/work/a', argv: ['pi'], pid: 11, ppid: 10 }]);
+  });
+
+  test('test_read_new_events_on_fresh_activation_expected_skips_stale_log_entries', async () => {
+    'Старый wrapper-events.jsonl не переигрывается как свежие события после новой активации.';
+    const eventLogPath = path.join(tempDir, 'wrapper-events.jsonl');
+    const staleEvent = { event: 'pi-wrapper-invocation', time: 10_000, cwd: '/work/a', argv: ['pi'], pid: 11, ppid: 10, sessionPath: '/tmp/old.jsonl' };
+    await writeFile(eventLogPath, `${JSON.stringify(staleEvent)}\n`, 'utf8');
+
+    const events = await new WrapperEventTail(eventLogPath, 20_000).readNewEvents();
+
+    expect(events).toEqual([]);
+  });
+
+  test('test_read_new_events_after_activation_expected_keeps_new_log_entries', async () => {
+    'Новые wrapper events после активации не теряются при первом чтении.';
+    const eventLogPath = path.join(tempDir, 'wrapper-events.jsonl');
+    const staleEvent = { event: 'pi-wrapper-invocation', time: 10_000, cwd: '/work/a', argv: ['pi'], pid: 11, ppid: 10, sessionPath: '/tmp/old.jsonl' };
+    const newEvent = { event: 'pi-wrapper-invocation', time: 21_000, cwd: '/work/a', argv: ['pi'], pid: 12, ppid: 10, sessionPath: '/tmp/new.jsonl' };
+    await writeFile(eventLogPath, `${JSON.stringify(staleEvent)}\n`, 'utf8');
+    const tail = new WrapperEventTail(eventLogPath, 20_000);
+    await appendFile(eventLogPath, `${JSON.stringify(newEvent)}\n`, 'utf8');
+
+    expect(await tail.readNewEvents()).toEqual([newEvent]);
+  });
+
+  test('test_read_new_events_after_initial_read_expected_reads_appended_events_without_timestamp_filter', async () => {
+    'Последующие чтения продолжают читать добавленные события по offset.';
+    const eventLogPath = path.join(tempDir, 'wrapper-events.jsonl');
+    const firstEvent = { event: 'pi-wrapper-invocation', time: 21_000, cwd: '/work/a', argv: ['pi'], pid: 12, ppid: 10, sessionPath: '/tmp/new.jsonl' };
+    const secondEvent = { event: 'pi-wrapper-exit', time: 21_500, cwd: '/work/a', argv: ['pi'], pid: 12, ppid: 10, exitCode: 0 };
+    await writeFile(eventLogPath, `${JSON.stringify(firstEvent)}\n`, 'utf8');
+    const tail = new WrapperEventTail(eventLogPath, 20_000);
+
+    expect(await tail.readNewEvents()).toEqual([firstEvent]);
+    await appendFile(eventLogPath, `${JSON.stringify(secondEvent)}\n`, 'utf8');
+
+    expect(await tail.readNewEvents()).toEqual([secondEvent]);
   });
 });

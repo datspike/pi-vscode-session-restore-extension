@@ -3,8 +3,12 @@ import type { TrackerEvent } from '../types.js';
 
 export class WrapperEventTail {
   private offset = 0;
+  private firstReadPending = true;
 
-  public constructor(private readonly filePath: string) {}
+  public constructor(
+    private readonly filePath: string,
+    private readonly activationTimeMs: number = Date.now()
+  ) {}
 
   public async readNewEvents(): Promise<TrackerEvent[]> {
     const fileStat = await stat(this.filePath).catch(() => undefined);
@@ -24,7 +28,12 @@ export class WrapperEventTail {
       const buffer = Buffer.alloc(length);
       await handle.read(buffer, 0, length, this.offset);
       this.offset = fileStat.size;
-      return parseTrackerEvents(buffer.toString('utf8'));
+      const events = parseTrackerEvents(buffer.toString('utf8'));
+      if (!this.firstReadPending) {
+        return events;
+      }
+      this.firstReadPending = false;
+      return events.filter((event) => event.time >= this.activationTimeMs);
     } finally {
       await handle.close();
     }
