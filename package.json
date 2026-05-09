@@ -2,7 +2,7 @@
   "name": "pi-vscode-session-restore-extension",
   "displayName": "Pi Session Restore",
   "description": "Best-effort Pi session restore for VS Code integrated terminals.",
-  "version": "0.0.5",
+  "version": "0.1.0",
   "publisher": "datspike",
   "private": true,
   "type": "module",
