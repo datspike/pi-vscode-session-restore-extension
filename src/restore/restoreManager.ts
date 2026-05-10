@@ -23,6 +23,16 @@ export interface AutoRestoreManyResult {
   skipped: string[];
 }
 
+export function selectMissingAutoCreateRecords(
+  records: readonly RestoreRecord[],
+  pairs: readonly AutoRestorePair[]
+): RestoreRecord[] {
+  const pairedRecordIds = new Set(pairs.map((pair) => pair.record.id));
+  return records.filter((record) => isAutoRestorableRecord(record)
+    && record.lastRestoreAt !== undefined
+    && !pairedRecordIds.has(record.id));
+}
+
 export function getRestoreTerminalName(record: RestoreRecord | undefined): string {
   const terminalName = record?.terminalName?.trim();
   return terminalName && terminalName.length > 0 ? terminalName : 'Pi Session Restore';
@@ -246,12 +256,12 @@ export class RestoreManager {
     return true;
   }
 
-  public async getAutoRestoreRecords(scopeCwd: string, terminalCount: number): Promise<RestoreRecord[]> {
+  public async getAutoRestoreRecords(scopeCwd: string, terminalCount?: number): Promise<RestoreRecord[]> {
     const records = await this.store.listForWorkspaceScope(scopeCwd);
-    return records
+    const eligibleRecords = records
       .filter(isAutoRestorableRecord)
-      .sort((left, right) => left.startedAt - right.startedAt)
-      .slice(-terminalCount);
+      .sort((left, right) => left.startedAt - right.startedAt);
+    return terminalCount === undefined ? eligibleRecords : eligibleRecords.slice(-terminalCount);
   }
 
   private async decide(record: RestoreRecord | undefined) {

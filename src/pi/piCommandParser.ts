@@ -30,6 +30,10 @@ export function parseShellCommand(commandText: string, startedAt: number, cwd?: 
   if (shellPid !== undefined) {
     invocation.shellPid = shellPid;
   }
+  const explicitSessionPath = getExplicitSessionArg(invocation.args);
+  if (explicitSessionPath !== undefined) {
+    invocation.sessionPath = explicitSessionPath;
+  }
   return invocation;
 }
 

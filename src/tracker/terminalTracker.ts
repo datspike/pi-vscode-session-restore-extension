@@ -88,12 +88,12 @@ export class TerminalTracker implements vscode.Disposable {
       invocation.terminalName = closedMarker.terminalName;
     }
     if (invocation.sessionPath !== undefined) {
-      const explicitSessionPath = await this.validateExplicitWrapperSession(invocation.sessionPath, invocation.cwd);
+      const explicitSessionPath = await this.validateExplicitSession(invocation.sessionPath, invocation.cwd);
       if (explicitSessionPath !== undefined) {
         if (closedMarker === undefined) {
           await this.rememberShellSession(event.ppid, explicitSessionPath);
         }
-        await this.storeDirectWrapperRecord(invocation, explicitSessionPath, closedMarker);
+        await this.storeDirectSessionRecord(invocation, explicitSessionPath, closedMarker);
         return;
       }
     }
@@ -118,6 +118,16 @@ export class TerminalTracker implements vscode.Disposable {
     }
     this.activeInvocations.delete(event.execution);
     invocation.endedAt = Date.now();
+    if (invocation.sessionPath !== undefined) {
+      const explicitSessionPath = await this.validateExplicitSession(invocation.sessionPath, invocation.cwd);
+      if (explicitSessionPath !== undefined) {
+        if (invocation.shellPid !== undefined) {
+          await this.rememberShellSession(invocation.shellPid, explicitSessionPath);
+        }
+        await this.storeDirectSessionRecord(invocation, explicitSessionPath);
+        return;
+      }
+    }
     await this.matchAndStore(invocation);
   }
 
@@ -188,29 +198,29 @@ export class TerminalTracker implements vscode.Disposable {
     this.logger.info('Stored authoritative Pi session record from Pi extension.');
   }
 
-  private async validateExplicitWrapperSession(sessionPath: string, cwd: string | undefined): Promise<string | undefined> {
+  private async validateExplicitSession(sessionPath: string, cwd: string | undefined): Promise<string | undefined> {
     if (path.extname(sessionPath) !== '.jsonl') {
-      this.logger.debug('Explicit Pi session path from wrapper argv skipped because it is not a JSONL file.');
+      this.logger.debug('Explicit Pi session path skipped because it is not a JSONL file.');
       return undefined;
     }
     const fileStat = await stat(sessionPath).catch(() => undefined);
     if (!fileStat?.isFile()) {
-      this.logger.debug('Explicit Pi session path from wrapper argv skipped because file is absent.');
+      this.logger.debug('Explicit Pi session path skipped because file is absent.');
       return undefined;
     }
     const metadata = await readPiSessionMetadata(sessionPath).catch(() => undefined);
     if (metadata === undefined) {
-      this.logger.debug('Explicit Pi session path from wrapper argv skipped because file is not a Pi session JSONL.');
+      this.logger.debug('Explicit Pi session path skipped because file is not a Pi session JSONL.');
       return undefined;
     }
     if (cwd !== undefined && metadata.cwd !== undefined && path.resolve(metadata.cwd) !== path.resolve(cwd)) {
-      this.logger.debug('Explicit Pi session path from wrapper argv skipped because session cwd does not match invocation cwd.');
+      this.logger.debug('Explicit Pi session path skipped because session cwd does not match invocation cwd.');
       return undefined;
     }
     return sessionPath;
   }
 
-  private async storeDirectWrapperRecord(
+  private async storeDirectSessionRecord(
     invocation: PiInvocation,
     sessionPath: string,
     closedMarker?: { terminalName: string; closedAt: number }
@@ -225,13 +235,13 @@ export class TerminalTracker implements vscode.Disposable {
       matchedAt,
       confidence: 'high',
       score: 100,
-      reasons: ['wrapper reported explicit Pi session path'],
+      reasons: [`${invocation.source} reported explicit Pi session path`],
       restoreAttempts: 0
     };
     this.applyInvocationMetadata(record, invocation);
     this.applyClosedMarker(record, closedMarker);
     await this.store.add(record, this.getConfig().recordTtlDays);
-    this.logger.info('Stored explicit Pi session record from wrapper.');
+    this.logger.info(`Stored explicit Pi session record from ${invocation.source}.`);
   }
 
   private async matchAndStore(invocation: PiInvocation, closedMarker?: { terminalName: string; closedAt: number }): Promise<void> {

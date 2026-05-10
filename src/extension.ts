@@ -5,7 +5,14 @@ import { readConfig } from './config.js';
 import { configurePathWrapper } from './env/pathWrapper.js';
 import { Logger } from './log.js';
 import { ensurePiSessionReporterInstalled } from './pi/piExtensionInstaller.js';
-import { getRestoreTerminalName, RestoreManager, type AutoRestoreTarget, type TerminalRenamer } from './restore/restoreManager.js';
+import {
+  getRestoreTerminalName,
+  RestoreManager,
+  selectAutoRestorePairs,
+  selectMissingAutoCreateRecords,
+  type AutoRestoreTarget,
+  type TerminalRenamer
+} from './restore/restoreManager.js';
 import { RecordStore } from './store/recordStore.js';
 import { TerminalTracker } from './tracker/terminalTracker.js';
 import { getTerminalTitleSnapshot } from './tracker/terminalTitle.js';
@@ -169,10 +176,33 @@ async function runConservativeAutoRestore(
     logger.info('Auto-restore skipped because terminal cwd is not ready.');
     return;
   }
-  const eligibleRecords = await manager.getAutoRestoreRecords(scopeCwd, idleTerminals.length);
-  logger.debug(`Auto-restore candidates: idle=${idleTerminals.length}, targets=${restoreTargets.map((target) => target.title ?? 'unnamed').join(', ')}, records=${eligibleRecords.map(describeRecordForLog).join(' | ')}`);
+  const eligibleRecords = await manager.getAutoRestoreRecords(scopeCwd);
+  const plannedPairs = selectAutoRestorePairs(eligibleRecords, restoreTargets, scopeCwd);
+  const missingRecords = selectMissingAutoCreateRecords(eligibleRecords, plannedPairs);
+  logger.debug(`Auto-restore candidates: idle=${idleTerminals.length}, targets=${restoreTargets.map(describeTargetForLog).join(', ')}, records=${eligibleRecords.map(describeRecordForLog).join(' | ')}, planned=${plannedPairs.map(describePairForLog).join(' | ')}, missing=${missingRecords.map(describeRecordForLog).join(' | ')}`);
   const result = await manager.autoRestoreTargets(restoreTargets, scopeCwd);
-  logger.info(`Auto-restore result: restored=${result.restored}, skipped=${result.skipped.join('; ')}`);
+  const created = await autoRestoreMissingRecords(missingRecords, manager, logger);
+  logger.info(`Auto-restore result: restored=${result.restored}, created=${created.restored}, skipped=${[...result.skipped, ...created.skipped].join('; ')}`);
+}
+
+async function autoRestoreMissingRecords(
+  records: readonly RestoreRecord[],
+  manager: RestoreManager,
+  logger: Logger
+): Promise<{ restored: number; skipped: string[] }> {
+  let restored = 0;
+  const skipped: string[] = [];
+  for (const record of records) {
+    const terminal = createRestoreTerminal(record);
+    const restoreClaimed = await manager.executeRestore(terminal, record);
+    if (restoreClaimed) {
+      restored += 1;
+      logger.debug(`Auto-created restore terminal for missing record: ${describeRecordForLog(record)}`);
+    } else {
+      skipped.push(`${record.sessionPath}: restore was attempted recently for this record`);
+    }
+  }
+  return { restored, skipped };
 }
 
 function createRestoreManager(store: RecordStore, config: ExtensionConfig, logger: Logger): RestoreManager {
@@ -222,6 +252,14 @@ function describeRecordForLog(record: RestoreRecord): string {
   return `${record.terminalName ?? 'unnamed'}:${record.sessionPath}:closed=${record.terminalClosedAt ?? 'no'}:attempts=${record.restoreAttempts}`;
 }
 
+function describeTargetForLog(target: AutoRestoreTarget): string {
+  return `${target.title ?? 'unnamed'}:${target.cwd ?? 'no-cwd'}`;
+}
+
+function describePairForLog(pair: { target: AutoRestoreTarget; record: RestoreRecord }): string {
+  return `${describeTargetForLog(pair.target)}=>${describeRecordForLog(pair.record)}`;
+}
+
 async function waitForIdleTerminals(logger: Logger): Promise<vscode.Terminal[]> {
   for (const delayMs of AUTO_RESTORE_IDLE_RETRY_DELAYS_MS) {
     if (delayMs > 0) {
@@ -266,7 +304,11 @@ function createAutoRestoreTargets(terminals: readonly vscode.Terminal[]): AutoRe
 }
 
 function createRestoreTerminal(record: RestoreRecord | undefined): vscode.Terminal {
-  return vscode.window.createTerminal({ name: getRestoreTerminalName(record) });
+  const options: vscode.TerminalOptions = { name: getRestoreTerminalName(record) };
+  if (record?.cwd !== undefined) {
+    options.cwd = record.cwd;
+  }
+  return vscode.window.createTerminal(options);
 }
 
 function sleep(delayMs: number): Promise<void> {

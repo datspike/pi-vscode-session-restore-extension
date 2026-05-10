@@ -3,7 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type * as vscode from 'vscode';
-import { getRestoreTerminalName, isAutoRestorableRecord, RestoreManager, selectAutoRestorePairs } from '../src/restore/restoreManager.js';
+import {
+  getRestoreTerminalName,
+  isAutoRestorableRecord,
+  RestoreManager,
+  selectAutoRestorePairs,
+  selectMissingAutoCreateRecords
+} from '../src/restore/restoreManager.js';
 import { createRecordId, RecordStore } from '../src/store/recordStore.js';
 import type { ExtensionConfig, RestoreRecord } from '../src/types.js';
 
@@ -270,6 +276,16 @@ describe('RestoreManager', () => {
       { target: firstTarget, record: oldRecord },
       { target: secondTarget, record: newRecord }
     ]);
+  });
+
+  test('test_select_missing_auto_create_records_expected_only_previously_restored_unpaired_records', () => {
+    'Недостающие auto-created вкладки выбираются только из ранее восстановленных records.';
+    const pairedRecord = { ...makeRecord('/tmp/paired.jsonl', 12_000, '/work/a'), lastRestoreAt: 15_000 };
+    const missingRecord = { ...makeRecord('/tmp/missing.jsonl', 10_000, '/work/a'), lastRestoreAt: 15_000 };
+    const staleManualRecord = makeRecord('/tmp/manual.jsonl', 11_000, '/work/a');
+    const target = { terminal: makeTerminal(), cwd: '/work/a' };
+
+    expect(selectMissingAutoCreateRecords([missingRecord, staleManualRecord, pairedRecord], [{ target, record: pairedRecord }])).toEqual([missingRecord]);
   });
 
   test('test_select_auto_restore_pairs_duplicate_titles_closed_markers_expected_skip_ambiguous_fallback', () => {

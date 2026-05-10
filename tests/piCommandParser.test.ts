@@ -22,6 +22,12 @@ describe('piCommandParser', () => {
     expect(invocation?.args).toEqual(['--continue']);
   });
 
+  test('test_parse_shell_command_with_session_expected_session_path', () => {
+    'Shell command parser извлекает explicit --session так же, как wrapper argv.';
+    const invocation = parseShellCommand('pi --session /tmp/s.jsonl', 1_000, '/work', 42);
+    expect(invocation?.sessionPath).toBe('/tmp/s.jsonl');
+  });
+
   test('test_ignore_diagnostic_commands_expected_undefined', () => {
     'Диагностические команды оболочки не считаются запуском pi.';
     expect(parseShellCommand('which pi', 1)).toBeUndefined();

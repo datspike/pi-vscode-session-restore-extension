@@ -188,6 +188,36 @@ describe('TerminalTracker lifecycle', () => {
 });
 
 describe('TerminalTracker explicit wrapper session', () => {
+  test('test_shell_execution_with_explicit_session_expected_stores_explicit_record_without_mtime_match', async () => {
+    'Shell integration explicit --session не создаёт ложный record через mtime matching.';
+    const cwd = path.join(tempDir, 'project');
+    const explicitSessionPath = path.join(tempDir, 'explicit.jsonl');
+    const competingSessionPath = path.join(tempDir, 'competing.jsonl');
+    await writeFile(explicitSessionPath, `${JSON.stringify({ cwd, id: 'explicit-session' })}\n`, 'utf8');
+    await writeFile(competingSessionPath, `${JSON.stringify({ cwd, id: 'competing-session' })}\n`, 'utf8');
+    const store = new RecordStore(tempDir, () => 20_000);
+    const tracker = new TerminalTracker(store, () => makeConfig([path.join(tempDir, '*.jsonl')]), makeLogger());
+    const terminal = makeTerminal('Pi explicit', 123);
+    const execution = {
+      commandLine: { value: `pi --session ${explicitSessionPath}` },
+      cwd: { fsPath: cwd }
+    } as unknown as vscode.TerminalShellExecution;
+
+    await trackerHarness(tracker).onShellExecutionStart({ terminal, execution } as vscode.TerminalShellExecutionStartEvent);
+    await trackerHarness(tracker).onShellExecutionEnd({ execution } as vscode.TerminalShellExecutionEndEvent);
+
+    const records = (await store.read()).records;
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      sessionPath: explicitSessionPath,
+      cwd,
+      args: ['--session', explicitSessionPath],
+      shellPid: 123,
+      reasons: ['shellIntegration reported explicit Pi session path']
+    });
+    expect(records[0]!.sessionPath).not.toBe(competingSessionPath);
+  });
+
   test('test_ingest_wrapper_event_with_explicit_session_argv_expected_stores_record_without_pi_side_event', async () => {
     'Explicit --session из wrapper argv создаёт record без Pi-side session_start события.';
     const cwd = path.join(tempDir, 'project');
@@ -329,6 +359,8 @@ describe('TerminalTracker explicit wrapper session', () => {
 });
 
 type TerminalTrackerHarness = {
+  onShellExecutionStart: (event: vscode.TerminalShellExecutionStartEvent) => Promise<void>;
+  onShellExecutionEnd: (event: vscode.TerminalShellExecutionEndEvent) => Promise<void>;
   onTerminalClose: (terminal: vscode.Terminal) => Promise<void>;
   refreshTerminalName: (terminal: vscode.Terminal) => Promise<boolean>;
 };
