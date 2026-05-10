@@ -39,7 +39,18 @@ export function getRestoreTerminalName(record: RestoreRecord | undefined): strin
 }
 
 export function isAutoRestorableRecord(record: RestoreRecord): boolean {
-  return record.confidence === 'high' && record.terminalClosedAt === undefined;
+  return record.confidence === 'high'
+    && record.terminalClosedAt === undefined
+    && !isUnverifiedExplicitSessionMatch(record);
+}
+
+function isUnverifiedExplicitSessionMatch(record: RestoreRecord): boolean {
+  const hasExplicitSessionArg = record.args.some((arg) => arg === '--session' || arg.startsWith('--session='));
+  if (!hasExplicitSessionArg) {
+    return false;
+  }
+  return !record.reasons.some((reason) => reason.includes('reported explicit Pi session path')
+    || reason.startsWith('pi extension reported session_start'));
 }
 
 export function selectAutoRestorePairs(

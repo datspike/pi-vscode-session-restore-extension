@@ -177,6 +177,23 @@ describe('RestoreManager', () => {
     expect(isAutoRestorableRecord({ ...makeRecord('/tmp/closed.jsonl', 10_000, '/work/a'), terminalClosedAt: 12_000 })).toBe(false);
   });
 
+  test('test_is_auto_restorable_record_with_unverified_explicit_session_match_expected_false', () => {
+    'Mtime-match от explicit --session не считается auto-restorable без authoritative события.';
+    const mtimeRecord = {
+      ...makeRecord('/tmp/mtime.jsonl', 10_000, '/work/a'),
+      args: ['--session', '/tmp/target.jsonl'],
+      reasons: ['session mtime is near invocation window']
+    };
+    const explicitRecord = {
+      ...makeRecord('/tmp/explicit.jsonl', 10_000, '/work/a'),
+      args: ['--session', '/tmp/explicit.jsonl'],
+      reasons: ['shellIntegration reported explicit Pi session path']
+    };
+
+    expect(isAutoRestorableRecord(mtimeRecord)).toBe(false);
+    expect(isAutoRestorableRecord(explicitRecord)).toBe(true);
+  });
+
   test('test_execute_restore_with_terminal_name_expected_invokes_renamer_before_command', async () => {
     'Restore применяет сохранённое имя вкладки перед запуском pi.';
     const sessionPath = path.join(tempDir, 'session.jsonl');
